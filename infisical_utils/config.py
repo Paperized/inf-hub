@@ -1,8 +1,14 @@
 import json
 from pathlib import Path
 
+import keyring
+import yaml
+
 CONFIG_DIR = Path.home() / ".config" / "infisical-utils"
 CONFIG_FILE = CONFIG_DIR / "config.json"
+KEYRING_SERVICE = "infisical-utils"
+KEYRING_USERNAME = "default-token"
+LOCAL_INF_FILE = Path(".inf")
 
 DEFAULT_TYPES = ("orgId", "identityId", "projectId", "environment")
 
@@ -26,11 +32,45 @@ def save_config(config):
 
 
 def get_config_or_exit():
+    token = load_token_secure()
     config = load_config()
-    if not config:
+    legacy_token = (config or {}).get("token")
+    if not token and not legacy_token:
         print("Error: not configured. Run 'infisical-utils init' first.")
         raise SystemExit(1)
+    if not config:
+        config = {}
+    config["token"] = token or legacy_token
     return config
+
+
+def load_token_secure():
+    return keyring.get_password(KEYRING_SERVICE, KEYRING_USERNAME)
+
+
+def save_token_secure(token):
+    keyring.set_password(KEYRING_SERVICE, KEYRING_USERNAME, token)
+
+
+def delete_token_secure():
+    try:
+        keyring.delete_password(KEYRING_SERVICE, KEYRING_USERNAME)
+    except keyring.errors.PasswordDeleteError:
+        pass
+
+
+def get_token_or_exit():
+    token = load_token_secure()
+    if token:
+        return token
+
+    config = load_config() or {}
+    legacy_token = config.get("token")
+    if legacy_token:
+        return legacy_token
+
+    print("Error: not configured. Run 'infisical-utils init' first.")
+    raise SystemExit(1)
 
 
 def get_default(key):
@@ -59,3 +99,25 @@ def remove_default(key):
         return
     config["defaults"].pop(key, None)
     save_config(config)
+
+
+def load_local_inf():
+    if not LOCAL_INF_FILE.exists():
+        return None
+    with open(LOCAL_INF_FILE) as f:
+        data = yaml.safe_load(f)
+    if data is None:
+        return {}
+    if not isinstance(data, dict):
+        raise ValueError("Invalid .inf format: expected a YAML object with keys orgId/projectId/environment.")
+    return data
+
+
+def save_local_inf(org_id, project_id, environment):
+    payload = {
+        "orgId": org_id,
+        "projectId": project_id,
+        "environment": environment,
+    }
+    with open(LOCAL_INF_FILE, "w") as f:
+        yaml.safe_dump(payload, f, sort_keys=False)

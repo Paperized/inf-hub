@@ -6,10 +6,54 @@ import sys
 
 import argcomplete
 
-from infisical_utils.config import save_config, get_config_or_exit, CONFIG_FILE, get_default, set_default, remove_default, load_config, DEFAULT_TYPES
+from infisical_utils.config import (
+    save_config,
+    CONFIG_FILE,
+    get_default,
+    set_default,
+    remove_default,
+    load_config,
+    DEFAULT_TYPES,
+    get_token_or_exit,
+    save_token_secure,
+    load_token_secure,
+    load_local_inf,
+    save_local_inf,
+)
 from infisical_utils.api import InfisicalAPI
 
 VALID_ROLES = ("admin", "member", "viewer", "no-access")
+
+
+def _load_local_inf_silent():
+    try:
+        return load_local_inf()
+    except Exception:
+        return None
+
+
+def _load_local_inf_or_exit():
+    try:
+        return load_local_inf()
+    except ValueError as e:
+        print(f"Error: {e}")
+        raise SystemExit(1)
+    except Exception as e:
+        print(f"Error: cannot read .inf: {e}")
+        raise SystemExit(1)
+
+
+def _get_default_with_local_override(key):
+    local_inf = _load_local_inf_or_exit()
+    if local_inf is not None:
+        return local_inf.get(key)
+    return get_default(key)
+
+
+def _warn_local_override(args, attr_name, label):
+    local_inf = _load_local_inf_silent()
+    if local_inf is not None and getattr(args, attr_name, None):
+        print(f"Warning: overriding local .inf value for {label}.")
 
 
 def _get_api_silent():
@@ -19,9 +63,10 @@ def _get_api_silent():
         if not base_url:
             return None
         config = load_config()
-        if not config or "token" not in config:
+        token = load_token_secure()
+        if not token and (not config or "token" not in config):
             return None
-        return InfisicalAPI(base_url, config["token"])
+        return InfisicalAPI(base_url, token or config["token"])
     except Exception:
         return None
 
@@ -65,7 +110,7 @@ def _complete_identity_ids(prefix, **kwargs):
     if not api:
         return []
     try:
-        org_id = get_default("orgId")
+        org_id = _get_default_with_local_override("orgId")
         if not org_id:
             return []
         result = api.list_identities(org_id)
@@ -81,7 +126,7 @@ def _complete_environments(prefix, **kwargs):
     if not api:
         return []
     try:
-        project_id = get_default("projectId")
+        project_id = _get_default_with_local_override("projectId")
         if not project_id:
             return []
         result = api.list_projects()
@@ -117,7 +162,7 @@ def confirm(message):
     return response.lower() in ("y", "yes")
 
 
-def cmd_init(args):
+def cmd_init_token(args):
     print("Configure infisical-utils")
 
     if not os.environ.get("INFISICAL_API_URL"):
@@ -140,20 +185,63 @@ def cmd_init(args):
         print("Error: token is required.")
         raise SystemExit(1)
 
+    save_token_secure(token)
     existing = load_config() or {}
-    existing["token"] = token
+    # Keep only non-sensitive settings in config.json.
+    existing.pop("token", None)
     save_config(existing)
     print(f"Configuration saved to {CONFIG_FILE}")
 
 
+def cmd_init_folder(args):
+    org_id = _parse_id(args.org_id) if args.org_id else None
+    project_id = _parse_id(args.project_id) if args.project_id else None
+    environment = args.environment or "dev"
+
+    if not args.yes:
+        if not org_id:
+            org_id = prompt("Organization ID")
+        if not project_id:
+            project_id = prompt("Project ID")
+        if not environment:
+            environment = prompt("Environment", default="dev")
+    else:
+        if not org_id:
+            print("Error: --org-id is required with --yes")
+            raise SystemExit(1)
+        if not project_id:
+            print("Error: --project-id is required with --yes")
+            raise SystemExit(1)
+
+    if not org_id:
+        print("Error: organization ID is required.")
+        raise SystemExit(1)
+    if not project_id:
+        print("Error: project ID is required.")
+        raise SystemExit(1)
+
+    if not args.yes:
+        print("\nLocal folder defaults (.inf):")
+        print(f"  orgId:       {org_id}")
+        print(f"  projectId:   {project_id}")
+        print(f"  environment: {environment}")
+        if not confirm("Proceed?"):
+            print("Aborted.")
+            return
+
+    save_local_inf(org_id, project_id, environment)
+    print("Folder configuration saved to .inf")
+
+
 def cmd_create_project(args):
-    config = get_config_or_exit()
+    token = get_token_or_exit()
     base_url = get_base_url_or_exit()
-    api = InfisicalAPI(base_url, config["token"])
+    api = InfisicalAPI(base_url, token)
 
     project_name = args.name
     slug = args.slug
-    org_id = _parse_id(args.org_id) or get_default("orgId")
+    _warn_local_override(args, "org_id", "orgId")
+    org_id = _parse_id(args.org_id) or _get_default_with_local_override("orgId")
     identity_id = _parse_id(args.identity_id) or get_default("identityId")
     role = args.role
 
@@ -212,9 +300,9 @@ def cmd_create_project(args):
 
 
 def cmd_list_orgs(args):
-    config = get_config_or_exit()
+    token = get_token_or_exit()
     base_url = get_base_url_or_exit()
-    api = InfisicalAPI(base_url, config["token"])
+    api = InfisicalAPI(base_url, token)
 
     result = api.list_organizations()
     orgs = result.get("organizations", [])
@@ -233,9 +321,9 @@ def cmd_list_orgs(args):
 
 
 def cmd_list_projects(args):
-    config = get_config_or_exit()
+    token = get_token_or_exit()
     base_url = get_base_url_or_exit()
-    api = InfisicalAPI(base_url, config["token"])
+    api = InfisicalAPI(base_url, token)
 
     result = api.list_projects()
     projects = result.get("projects", [])
@@ -258,11 +346,12 @@ def cmd_list_projects(args):
 
 
 def cmd_list_identities(args):
-    config = get_config_or_exit()
+    token = get_token_or_exit()
     base_url = get_base_url_or_exit()
-    api = InfisicalAPI(base_url, config["token"])
+    api = InfisicalAPI(base_url, token)
 
-    org_id = _parse_id(args.org_id) or get_default("orgId")
+    _warn_local_override(args, "org_id", "orgId")
+    org_id = _parse_id(args.org_id) or _get_default_with_local_override("orgId")
     if not org_id:
         org_id = prompt("Organization ID")
 
@@ -294,9 +383,9 @@ def cmd_set_default(args):
     if value:
         label = None
         try:
-            config = get_config_or_exit()
+            token = get_token_or_exit()
             base_url = get_base_url_or_exit()
-            api = InfisicalAPI(base_url, config["token"])
+            api = InfisicalAPI(base_url, token)
 
             if dtype == "projectId":
                 resolved = api.resolve_project(value)
@@ -351,8 +440,8 @@ def cmd_show_defaults(args):
     api = None
     try:
         base_url = get_base_url_or_exit()
-        cfg = get_config_or_exit()
-        api = InfisicalAPI(base_url, cfg["token"])
+        token = get_token_or_exit()
+        api = InfisicalAPI(base_url, token)
     except SystemExit:
         pass
 
@@ -396,12 +485,13 @@ def cmd_show_defaults(args):
 
 
 def cmd_show_env(args):
-    config = get_config_or_exit()
+    token = get_token_or_exit()
     base_url = get_base_url_or_exit()
-    api = InfisicalAPI(base_url, config["token"])
+    api = InfisicalAPI(base_url, token)
 
-    project_id = _parse_id(args.project_id) or get_default("projectId")
-    environment = args.environment or get_default("environment") or "dev"
+    _warn_local_override(args, "project_id", "projectId")
+    project_id = _parse_id(args.project_id) or _get_default_with_local_override("projectId")
+    environment = args.environment or _get_default_with_local_override("environment") or "dev"
 
     if not project_id:
         if not args.yes:
@@ -429,12 +519,13 @@ def cmd_show_env(args):
 
 
 def cmd_get_env(args):
-    config = get_config_or_exit()
+    token = get_token_or_exit()
     base_url = get_base_url_or_exit()
-    api = InfisicalAPI(base_url, config["token"])
+    api = InfisicalAPI(base_url, token)
 
-    project_id = _parse_id(args.project_id) or get_default("projectId")
-    environment = args.environment or get_default("environment") or "dev"
+    _warn_local_override(args, "project_id", "projectId")
+    project_id = _parse_id(args.project_id) or _get_default_with_local_override("projectId")
+    environment = args.environment or _get_default_with_local_override("environment") or "dev"
 
     if not project_id:
         if not args.yes:
@@ -456,12 +547,13 @@ def cmd_get_env(args):
 
 
 def cmd_update_env(args):
-    config = get_config_or_exit()
+    token = get_token_or_exit()
     base_url = get_base_url_or_exit()
-    api = InfisicalAPI(base_url, config["token"])
+    api = InfisicalAPI(base_url, token)
 
-    project_id = _parse_id(args.project_id) or get_default("projectId")
-    environment = args.environment or get_default("environment") or "dev"
+    _warn_local_override(args, "project_id", "projectId")
+    project_id = _parse_id(args.project_id) or _get_default_with_local_override("projectId")
+    environment = args.environment or _get_default_with_local_override("environment") or "dev"
 
     if not project_id:
         if not args.yes:
@@ -507,12 +599,13 @@ def cmd_update_env(args):
 
 
 def cmd_show_env_history(args):
-    config = get_config_or_exit()
+    token = get_token_or_exit()
     base_url = get_base_url_or_exit()
-    api = InfisicalAPI(base_url, config["token"])
+    api = InfisicalAPI(base_url, token)
 
-    project_id = _parse_id(args.project_id) or get_default("projectId")
-    environment = args.environment or get_default("environment") or "dev"
+    _warn_local_override(args, "project_id", "projectId")
+    project_id = _parse_id(args.project_id) or _get_default_with_local_override("projectId")
+    environment = args.environment or _get_default_with_local_override("environment") or "dev"
     secret_name = args.name
 
     if not project_id:
@@ -556,12 +649,13 @@ def cmd_show_env_history(args):
 
 
 def cmd_rollback_env(args):
-    config = get_config_or_exit()
+    token = get_token_or_exit()
     base_url = get_base_url_or_exit()
-    api = InfisicalAPI(base_url, config["token"])
+    api = InfisicalAPI(base_url, token)
 
-    project_id = _parse_id(args.project_id) or get_default("projectId")
-    environment = args.environment or get_default("environment") or "dev"
+    _warn_local_override(args, "project_id", "projectId")
+    project_id = _parse_id(args.project_id) or _get_default_with_local_override("projectId")
+    environment = args.environment or _get_default_with_local_override("environment") or "dev"
     secret_name = args.name
     version = args.version
 
@@ -613,9 +707,24 @@ def main():
     parser = argparse.ArgumentParser(prog="infisical-utils", description="CLI utilities for Infisical")
     sub = parser.add_subparsers(dest="command")
 
-    ini = sub.add_parser("init", help="Configure Infisical token")
-    ini.add_argument("--token", help="Infisical API token")
-    ini.add_argument("--yes", "-y", action="store_true", help="Skip confirmation prompts")
+    ini = sub.add_parser("init", help="Initialize infisical-utils")
+    ini_sub = ini.add_subparsers(dest="init_command")
+
+    ini_token = ini_sub.add_parser("token", help="Configure Infisical token")
+    ini_token.add_argument("--token", help="Infisical API token")
+    ini_token.add_argument("--yes", "-y", action="store_true", help="Skip confirmation prompts")
+    # Backward compatibility: allow `infisical-utils init --token ...`
+    ini.add_argument("--token", help=argparse.SUPPRESS)
+    ini.add_argument("--yes", "-y", action="store_true", help=argparse.SUPPRESS)
+
+    ini_folder = ini_sub.add_parser("folder", help="Initialize local folder defaults in .inf")
+    arg = ini_folder.add_argument("--org-id", help="Organization ID")
+    arg.completer = _complete_org_ids
+    arg = ini_folder.add_argument("--project-id", help="Project ID")
+    arg.completer = _complete_project_ids
+    arg = ini_folder.add_argument("--environment", "-e", help="Preferred environment (default: dev)")
+    arg.completer = _complete_environments
+    ini_folder.add_argument("--yes", "-y", action="store_true", help="Skip confirmation prompts")
 
     cp = sub.add_parser("create-project", help="Create a new Infisical project")
     cp.add_argument("--name", help="Project name")
@@ -691,7 +800,6 @@ def main():
         sys.exit(1)
 
     commands = {
-        "init": cmd_init,
         "create-project": cmd_create_project,
         "list-orgs": cmd_list_orgs,
         "list-projects": cmd_list_projects,
@@ -707,6 +815,12 @@ def main():
     }
 
     try:
+        if args.command == "init":
+            if getattr(args, "init_command", None) == "folder":
+                cmd_init_folder(args)
+            else:
+                cmd_init_token(args)
+            return
         commands[args.command](args)
     except KeyboardInterrupt:
         print("\nOperation cancelled.")
