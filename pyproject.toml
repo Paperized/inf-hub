@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "infisical-utils"
+version = "0.1.2"
+description = "CLI utilities for Infisical with advanced features"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+    {name = "Paperized"}
+]
+keywords = ["infisical", "cli", "secrets", "devops"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Utilities",
+]
+dependencies = ["argcomplete"]
+
+[project.scripts]
+infisical-utils = "infisical_utils.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/Paperized/infisical-utils"
+Repository = "https://github.com/Paperized/infisical-utils"
+Issues = "https://github.com/Paperized/infisical-utils/issues"
