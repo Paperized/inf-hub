@@ -4,7 +4,7 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A powerful CLI tool that extends Infisical's capabilities with advanced development features. Built for developers who need smart tab completion for project IDs and names, secret versioning with rollback, configurable defaults to avoid repetitive typing, and seamless environment variable management. Whether you're creating projects, managing machine identities, or working with secrets across multiple environments, infisical-utils streamlines your workflow with intelligent autocompletion and clean error handling.
+A CLI for Infisical with project-aware defaults, interactive REST-backed menus, bulk `.env` secret updates, secret version rollback, and smart autocompletion.
 
 ## Quick Setup
 
@@ -34,231 +34,162 @@ pip install -e .
 # Set your Infisical instance URL
 export INFISICAL_API_URL="https://app.infisical.com"  # or https://eu.infisical.com
 
-# Initialize with your API token
+# Initialize token (secure keyring storage)
 infisical-utils init
+# or
+infisical-utils init token --token "your-token" --yes
 ```
 
-### Optional: create an alias
+## Key Features
 
-For faster typing, add an alias to your shell config:
+### Secure Token Storage
+
+The token is stored in OS keyring (via `keyring`), not in plain text config.
+
+### Folder-level Configuration (`.inf`)
+
+You can initialize a working folder with local defaults:
 
 ```bash
-# zsh
-echo 'alias iu="infisical-utils"' >> ~/.zshrc
-source ~/.zshrc
-
-# bash
-echo 'alias iu="infisical-utils"' >> ~/.bashrc
-source ~/.bashrc
+infisical-utils init folder
+# or non-interactive
+infisical-utils init folder --org-id "uuid" --project-id "uuid" --environment dev --yes
 ```
 
-Then use it like:
-```bash
-iu show-env
-iu list-projects
-iu update-env --set "KEY=value" --yes
+This creates `./.inf` (YAML):
+
+```yaml
+orgId: your-org-id
+projectId: your-project-id
+environment: dev
 ```
 
-## Features
+When `.inf` exists in current folder, operational commands use it as default context.
+
+### Value Resolution Priority
+
+Values are resolved in this order:
+1. Explicit command-line parameter (e.g. `--project-id`)
+2. Local `./.inf` value (if present)
+3. Global configured default (`set-default`)
+4. Hardcoded fallback (e.g. `environment=dev`)
+5. Interactive selection/prompt (if not `--yes`)
+
+### Interactive Menus (REST-backed)
+
+In interactive mode (without `--yes`), IDs and environment are selected from live Infisical data (organizations, projects, environments, identities) using terminal menus.
 
 ### Smart Tab Completion
 
-Dynamic autocompletion that fetches real data from your Infisical instance:
+Dynamic completion is available for IDs, environments, and secret names.
 
 ```bash
 infisical-utils show-env --project-id <TAB>
-# Shows: 78f1a670-... | seal365
-#         1ad6b099-... | Certificate Manager
-
 infisical-utils show-env --environment <TAB>
-# Shows: dev  staging  prod
+infisical-utils set-default --type orgId --value <TAB>
+infisical-utils show-env-history --name <TAB>
 ```
 
-Setup autocompletion:
+Setup:
+
 ```bash
 # zsh
 echo 'eval "$(register-python-argcomplete infisical-utils)"' >> ~/.zshrc
 source ~/.zshrc
-
-# bash
-echo 'eval "$(register-python-argcomplete infisical-utils)"' >> ~/.bashrc
-source ~/.bashrc
 ```
 
-### Configurable Defaults
+### Bulk Secret Update from `.env`
 
-Set default values to avoid typing IDs repeatedly:
-
-```bash
-infisical-utils set-default --type org-id --value "uuid"
-infisical-utils set-default --type project-id --value "uuid"
-infisical-utils set-default --type identity-id --value "uuid"
-infisical-utils set-default --type environment --value "dev"
-
-# Show all defaults with resolved names
-infisical-utils show-defaults
-
-# Remove a default
-infisical-utils unset-default --type project-id
-```
-
-### Project Management
-
-Create and manage Infisical projects:
+`update-env` supports both single/multi key updates and full file ingest:
 
 ```bash
-# List organizations
-infisical-utils list-orgs
-
-# List projects with environments
-infisical-utils list-projects
-
-# Create project with custom slug
-infisical-utils create-project --name "My Project" --slug "my-project"
-
-# Create project and add identity with role
-infisical-utils create-project --name "my-project" --identity-id "uuid" --role admin --yes
-```
-
-### Identity Management
-
-Manage machine identities and their project memberships:
-
-```bash
-# List identities
-infisical-utils list-identities
-
-# List identities for specific org
-infisical-utils list-identities --org-id "uuid"
-```
-
-### Secret Management
-
-View, update, and rollback secrets with full versioning support:
-
-```bash
-# View secrets in tabular format
-infisical-utils show-env
-infisical-utils show-env --environment staging
-
-# Export secrets to .env file
-infisical-utils get-env > .env
-infisical-utils get-env --environment prod > .env.prod
-
-# Update secrets (creates new version automatically)
+# key-by-key
 infisical-utils update-env --set "KEY=value"
-infisical-utils update-env --set "KEY1=val1" --set "KEY2=val2" --yes
 
-# View version history
-infisical-utils show-env-history --name "API_KEY"
-
-# Rollback to previous version
-infisical-utils rollback-env --name "API_KEY" --version 2 --yes
+# bulk from .env
+infisical-utils update-env --file .env
 ```
 
-### Clean Error Handling
+In interactive mode it shows a per-key old/new diff before confirmation.
 
-No stacktraces, just clear error messages:
+### Rich Console Output
 
-```bash
-# API error 404: resource not found
-# API error 403: insufficient permissions
-# API error 401: invalid token
-# Missing configuration: suggestion to run init
-# Invalid input: specific message with correct format
-```
+Tables and diffs are rendered with `rich` when available (fallback to plain output otherwise).
 
 ## Command Reference
 
 | Command | Description |
 |---------|-------------|
-| `init` | Configure API token |
-| `set-default` | Set default values for org, project, identity, environment |
-| `unset-default` | Remove a default value |
-| `show-defaults` | Show all configured defaults with resolved names |
+| `init` / `init token` | Configure API token in secure keyring |
+| `init folder` | Create local `.inf` defaults in current directory |
+| `set-default` | Set global defaults (`orgId`, `projectId`, `identityId`, `environment`) |
+| `unset-default` | Remove a global default |
+| `show-defaults` | Show configured global defaults with resolved labels |
 | `list-orgs` | List accessible organizations |
 | `list-projects` | List projects with environments |
 | `list-identities` | List machine identities |
-| `create-project` | Create new project with optional identity and role |
-| `show-env` | Display secrets in tabular format |
-| `get-env` | Export secrets as KEY=VALUE (redirectable) |
-| `update-env` | Update secrets (auto-creates new version) |
+| `create-project` | Create new project with optional identity + role |
+| `show-env` | Display secrets in table format |
+| `get-env` | Export secrets as `KEY=VALUE` |
+| `update-env` | Update secrets using `--set` and/or `--file` |
 | `show-env-history` | Show version history for a secret |
-| `rollback-env` | Restore secret to previous version |
+| `rollback-env` | Restore secret to a previous version |
 
-All commands support `--yes` flag for non-interactive mode.
-
-## Value Resolution Priority
-
-Values are resolved in this order:
-1. Explicit command-line parameter (`--project-id "uuid"`)
-2. Configured default value (`set-default --type project-id`)
-3. Hardcoded value (e.g., environment = "dev")
-4. Interactive prompt (if not `--yes`)
+All commands support `--yes` for non-interactive automation.
 
 ## Examples
 
-### Typical workflow
+### Typical local project workflow
 
 ```bash
-# 1. Initial configuration
+# 1. Token setup (once)
 export INFISICAL_API_URL="https://eu.infisical.com"
 infisical-utils init
 
-# 2. Discover available IDs
-infisical-utils list-orgs
-infisical-utils set-default --type org-id --value "uuid-from-list"
+# 2. Folder context setup
+infisical-utils init folder
 
-infisical-utils list-projects
-infisical-utils set-default --type project-id --value "uuid-from-list"
-
-infisical-utils list-identities
-infisical-utils set-default --type identity-id --value "uuid-from-list"
-
-# 3. Work with secrets
+# 3. Work with secrets (uses .inf defaults)
 infisical-utils show-env
-infisical-utils update-env --set "NEW_KEY=new-value"
-infisical-utils get-env > .env
+infisical-utils update-env --file .env
 ```
 
-### Backup and restore
+### Override with warning in initialized folder
+
+In a folder with `.inf`, overriding `--project-id` or `--org-id` prints a warning to make the context switch explicit.
+
+### Backup and rollback
 
 ```bash
 # Backup
 infisical-utils get-env > backup.env
 
-# Modify
+# Update
 infisical-utils update-env --set "API_KEY=new-value" --yes
 
 # Check history
 infisical-utils show-env-history --name "API_KEY"
 
-# Rollback if needed
+# Rollback
 infisical-utils rollback-env --name "API_KEY" --version 2 --yes
 ```
 
 ## Configuration
 
-The tool stores configuration in `~/.config/infisical-utils/config.json`:
-- API token
-- Default values (org, project, identity, environment)
+Global config file: `~/.config/infisical-utils/config.json`
+- global defaults (`orgId`, `projectId`, `identityId`, `environment`)
 
-Secrets are never stored locally - they're always retrieved from Infisical.
+Local folder config: `./.inf`
+- folder defaults (`orgId`, `projectId`, `environment`)
+
+Token storage:
+- secure OS keyring backend (`keyring`, optional `keyring-pass` backend package installed)
 
 ## Development
 
 ```bash
-# Clone repository
 git clone git@github.com:Paperized/infisical-utils.git
 cd infisical-utils
-
-# Install in editable mode
 pip install -e .
-
-# Test commands
 infisical-utils --help
 ```
-
-## License
-
-MIT
