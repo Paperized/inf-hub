@@ -38,6 +38,27 @@ export INFISICAL_API_URL="https://app.infisical.com"  # or https://eu.infisical.
 infisical-utils init
 ```
 
+### Optional: create an alias
+
+For faster typing, add an alias to your shell config:
+
+```bash
+# zsh
+echo 'alias iu="infisical-utils"' >> ~/.zshrc
+source ~/.zshrc
+
+# bash
+echo 'alias iu="infisical-utils"' >> ~/.bashrc
+source ~/.bashrc
+```
+
+Then use it like:
+```bash
+iu show-env
+iu list-projects
+iu update-env --set "KEY=value" --yes
+```
+
 ## Features
 
 ### Smart Tab Completion
