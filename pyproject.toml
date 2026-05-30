@@ -26,10 +26,11 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
     "Topic :: Utilities",
 ]
-dependencies = ["argcomplete", "keyring", "keyring-pass", "PyYAML"]
+dependencies = ["argcomplete", "keyring", "keyring-pass", "PyYAML", "rich"]
 
 [project.scripts]
 infisical-utils = "infisical_utils.cli:main"
+infisical-test = "infisical_utils.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/Paperized/infisical-utils"

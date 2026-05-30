@@ -5,6 +5,12 @@ import os
 import sys
 
 import argcomplete
+try:
+    from rich.console import Console
+    from rich.table import Table
+    HAS_RICH = True
+except Exception:
+    HAS_RICH = False
 
 from infisical_utils.config import (
     save_config,
@@ -23,6 +29,42 @@ from infisical_utils.config import (
 from infisical_utils.api import InfisicalAPI
 
 VALID_ROLES = ("admin", "member", "viewer", "no-access")
+CONSOLE = Console() if HAS_RICH else None
+
+
+def _print_table(title, columns, rows):
+    if HAS_RICH:
+        table = Table(title=title)
+        for col in columns:
+            table.add_column(col)
+        for row in rows:
+            table.add_row(*[str(x) for x in row])
+        CONSOLE.print(table)
+        return
+    if title:
+        print(title)
+    print("  ".join(columns))
+    for row in rows:
+        print("  ".join(str(x) for x in row))
+
+
+def _print_diff_rows(title, rows):
+    if HAS_RICH:
+        table = Table(title=title)
+        table.add_column("KEY")
+        table.add_column("OLD")
+        table.add_column("NEW")
+        for key, old_value, new_value in rows:
+            old_display = "<MISSING>" if old_value is None else str(old_value)
+            table.add_row(str(key), old_display, str(new_value))
+        CONSOLE.print(table)
+        return
+    print(title)
+    for key, old_value, new_value in rows:
+        old_display = "<MISSING>" if old_value is None else old_value
+        print(f"  {key}:")
+        print(f"    old: {old_display}")
+        print(f"    new: {new_value}")
 
 
 def _load_local_inf_silent():
@@ -167,6 +209,25 @@ def _complete_secret_names(prefix, parsed_args, **kwargs):
         return [s.get("secretKey", "") for s in secrets if s.get("secretKey")]
     except Exception:
         return []
+
+
+def _parse_env_file(file_path):
+    updates = []
+    with open(file_path) as f:
+        for line_no, raw_line in enumerate(f, 1):
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("export "):
+                line = line[len("export "):].strip()
+            if "=" not in line:
+                raise ValueError(f"Invalid .env format at line {line_no}: expected KEY=VALUE")
+            key, value = line.split("=", 1)
+            key = key.strip()
+            if not key:
+                raise ValueError(f"Invalid .env format at line {line_no}: empty key")
+            updates.append((key, value))
+    return updates
 
 
 def get_base_url_or_exit():
@@ -342,13 +403,10 @@ def cmd_list_orgs(args):
         print("No organizations found.")
         return
 
-    print("Organizations:")
+    rows = []
     for org in orgs:
-        print(f"  ID: {org['id']}")
-        print(f"    Projects: {len(org['projects'])}")
-        for proj in org["projects"]:
-            print(f"      - {proj}")
-        print()
+        rows.append((org["id"], len(org["projects"]), ", ".join(org["projects"])))
+    _print_table("Organizations", ["ORG ID", "PROJECT COUNT", "PROJECTS"], rows)
 
 
 def cmd_list_projects(args):
@@ -363,17 +421,12 @@ def cmd_list_projects(args):
         print("No projects found.")
         return
 
-    print("Projects:")
+    rows = []
     for project in projects:
-        print(f"  {project['name']}")
-        print(f"    ID:   {project['id']}")
-        print(f"    Slug: {project['slug']}")
         envs = project.get("environments", [])
-        if envs:
-            print(f"    Environments:")
-            for env in envs:
-                print(f"      - {env['name']} (slug: {env['slug']})")
-        print()
+        env_display = ", ".join([f"{e['name']}({e['slug']})" for e in envs]) if envs else "-"
+        rows.append((project["name"], project["id"], project["slug"], env_display))
+    _print_table("Projects", ["NAME", "ID", "SLUG", "ENVIRONMENTS"], rows)
 
 
 def cmd_list_identities(args):
@@ -393,14 +446,13 @@ def cmd_list_identities(args):
         print("No identities found.")
         return
 
-    print("Machine Identities:")
+    rows = []
     for identity in identities:
         name = identity.get("identity", {}).get("name", "unknown")
         identity_id = identity.get("identityId", identity.get("id"))
         role = identity.get("role", "")
-        print(f"  {name}")
-        print(f"    ID:   {identity_id}")
-        print(f"    Role: {role}")
+        rows.append((name, identity_id, role))
+    _print_table("Machine Identities", ["NAME", "ID", "ROLE"], rows)
 
 
 def cmd_set_default(args):
@@ -478,13 +530,13 @@ def cmd_show_defaults(args):
     except SystemExit:
         pass
 
-    print("Defaults:")
+    rows = []
     for key in DEFAULT_TYPES:
         entry = defaults.get(key)
         value = entry.get("value") if isinstance(entry, dict) else entry
 
         if not value:
-            print(f"  {key}: <Unset>")
+            rows.append((key, "<Unset>", ""))
             continue
 
         label = None
@@ -511,10 +563,8 @@ def cmd_show_defaults(args):
             except Exception:
                 pass
 
-        if label:
-            print(f"  {key}: {value} ({label})")
-        else:
-            print(f"  {key}: {value}")
+        rows.append((key, value, label or ""))
+    _print_table("Defaults", ["TYPE", "VALUE", "LABEL"], rows)
 
 
 def cmd_show_env(args):
@@ -540,15 +590,8 @@ def cmd_show_env(args):
         print(f"No secrets found in project {project_id} for environment {environment}")
         return
 
-    key_width = max(len(s["secretKey"]) for s in secrets)
-    key_width = max(key_width, 3)
-
-    print(f"{'KEY':<{key_width}}  VALUE")
-    print(f"{'-'*key_width}  {'-'*40}")
-    for secret in secrets:
-        key = secret["secretKey"]
-        value = secret.get("secretValue", "")
-        print(f"{key:<{key_width}}  {value}")
+    rows = [(s["secretKey"], s.get("secretValue", "")) for s in secrets]
+    _print_table(f"Secrets ({environment})", ["KEY", "VALUE"], rows)
 
 
 def cmd_get_env(args):
@@ -596,33 +639,57 @@ def cmd_update_env(args):
             raise SystemExit(1)
 
     updates = []
-    for item in args.set:
+    set_items = args.set or []
+    for item in set_items:
         if "=" not in item:
             print(f"Error: invalid format '{item}'. Use KEY=VALUE")
             raise SystemExit(1)
         key, value = item.split("=", 1)
-        updates.append((key.strip(), value.strip()))
+        updates.append((key.strip(), value))
+
+    if args.file:
+        try:
+            updates.extend(_parse_env_file(args.file))
+        except FileNotFoundError:
+            print(f"Error: file not found '{args.file}'")
+            raise SystemExit(1)
+        except ValueError as e:
+            print(f"Error: {e}")
+            raise SystemExit(1)
 
     if not updates:
-        print("Error: no updates specified. Use --set KEY=VALUE")
+        print("Error: no updates specified. Use --set KEY=VALUE or --file .env")
         raise SystemExit(1)
 
+    try:
+        existing = api.list_secrets(project_id, environment).get("secrets", [])
+        current_values = {s.get("secretKey"): s.get("secretValue", "") for s in existing}
+    except Exception as e:
+        print(f"Error: unable to read current secrets for diff: {e}")
+        raise SystemExit(1)
+
+    display_updates = []
+    for key, new_value in updates:
+        old_value = current_values.get(key)
+        display_updates.append((key, old_value, new_value))
+
     if not args.yes:
-        print(f"Will update {len(updates)} secret(s) in environment '{environment}':")
-        for key, value in updates:
-            print(f"  {key} = {value}")
+        _print_diff_rows(
+            f"Pending updates ({environment}) - {len(display_updates)} item(s)",
+            display_updates,
+        )
         if not confirm("Proceed?"):
             return
 
-    for key, value in updates:
+    for key, old_value, value in display_updates:
         try:
             api.update_secret(project_id, environment, key, value)
-            print(f"Updated: {key}")
+            _print_diff_rows("Updated", [(key, old_value, value)])
         except RuntimeError as e:
             if "404" in str(e):
                 try:
                     api.create_secret(project_id, environment, key, value)
-                    print(f"Created: {key}")
+                    _print_diff_rows("Created", [(key, None, value)])
                 except Exception as create_err:
                     print(f"Error creating {key}: {create_err}")
             else:
@@ -807,6 +874,7 @@ def main():
     arg = ue.add_argument("--environment", "-e", help="Environment slug (default: dev)")
     arg.completer = _complete_environments
     ue.add_argument("--set", action="append", metavar="KEY=VALUE", help="Set a secret (can be used multiple times)")
+    ue.add_argument("--file", help="Load secrets from .env file (KEY=VALUE)")
     ue.add_argument("--yes", "-y", action="store_true", help="Skip confirmation prompts")
 
     sh = sub.add_parser("show-env-history", help="Show version history for a secret")
