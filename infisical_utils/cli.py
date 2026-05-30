@@ -138,6 +138,37 @@ def _complete_environments(prefix, **kwargs):
         return []
 
 
+def _complete_default_value(prefix, parsed_args, **kwargs):
+    """Autocomplete for `set-default --value` based on selected --type."""
+    dtype = getattr(parsed_args, "type", None)
+    if dtype == "orgId":
+        return _complete_org_ids(prefix, **kwargs)
+    if dtype == "projectId":
+        return _complete_project_ids(prefix, **kwargs)
+    if dtype == "identityId":
+        return _complete_identity_ids(prefix, **kwargs)
+    if dtype == "environment":
+        return _complete_environments(prefix, **kwargs)
+    return []
+
+
+def _complete_secret_names(prefix, parsed_args, **kwargs):
+    """Autocomplete for secret names based on effective project/environment."""
+    api = _get_api_silent()
+    if not api:
+        return []
+    try:
+        project_id = _parse_id(getattr(parsed_args, "project_id", None)) or _get_default_with_local_override("projectId")
+        environment = getattr(parsed_args, "environment", None) or _get_default_with_local_override("environment") or "dev"
+        if not project_id:
+            return []
+        result = api.list_secrets(project_id, environment)
+        secrets = result.get("secrets", [])
+        return [s.get("secretKey", "") for s in secrets if s.get("secretKey")]
+    except Exception:
+        return []
+
+
 def get_base_url_or_exit():
     base_url = os.environ.get("INFISICAL_API_URL")
     if not base_url:
@@ -746,7 +777,8 @@ def main():
 
     sd = sub.add_parser("set-default", help="Set or remove a default value")
     sd.add_argument("--type", required=True, choices=DEFAULT_TYPES, help="Type of default to set")
-    sd.add_argument("--value", help="Value to set (omit to remove)")
+    arg = sd.add_argument("--value", help="Value to set (omit to remove)")
+    arg.completer = _complete_default_value
 
     ud = sub.add_parser("unset-default", help="Remove a default value")
     ud.add_argument("--type", required=True, choices=DEFAULT_TYPES, help="Type of default to remove")
@@ -780,7 +812,8 @@ def main():
     arg.completer = _complete_project_ids
     arg = sh.add_argument("--environment", "-e", help="Environment slug (default: dev)")
     arg.completer = _complete_environments
-    sh.add_argument("--name", help="Secret name")
+    arg = sh.add_argument("--name", help="Secret name")
+    arg.completer = _complete_secret_names
     sh.add_argument("--yes", "-y", action="store_true", help="Skip confirmation prompts")
 
     rb = sub.add_parser("rollback-env", help="Rollback a secret to a previous version")
@@ -788,7 +821,8 @@ def main():
     arg.completer = _complete_project_ids
     arg = rb.add_argument("--environment", "-e", help="Environment slug (default: dev)")
     arg.completer = _complete_environments
-    rb.add_argument("--name", help="Secret name")
+    arg = rb.add_argument("--name", help="Secret name")
+    arg.completer = _complete_secret_names
     rb.add_argument("--version", help="Version to rollback to")
     rb.add_argument("--yes", "-y", action="store_true", help="Skip confirmation prompts")
 
