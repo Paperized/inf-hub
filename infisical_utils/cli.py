@@ -6,6 +6,11 @@ import sys
 
 import argcomplete
 try:
+    import questionary
+    HAS_QUESTIONARY = True
+except Exception:
+    HAS_QUESTIONARY = False
+try:
     from rich.console import Console
     from rich.table import Table
     HAS_RICH = True
@@ -65,6 +70,73 @@ def _print_diff_rows(title, rows):
         print(f"  {key}:")
         print(f"    old: {old_display}")
         print(f"    new: {new_value}")
+
+
+def _select_from_choices(message, choices):
+    if HAS_QUESTIONARY:
+        answer = questionary.select(message, choices=choices).ask()
+        if answer:
+            return answer
+    return None
+
+
+def _interactive_select_org_id(api):
+    try:
+        orgs = api.list_organizations().get("organizations", [])
+    except Exception:
+        return None
+    if not orgs:
+        return None
+    choices = [f"{o['id']} | {o.get('name', o['id'])}" for o in orgs]
+    selected = _select_from_choices("Select organization", choices)
+    return _parse_id(selected) if selected else None
+
+
+def _interactive_select_project_id(api):
+    try:
+        projects = api.list_projects().get("projects", [])
+    except Exception:
+        return None
+    if not projects:
+        return None
+    choices = [f"{p['id']} | {p['name']}" for p in projects]
+    selected = _select_from_choices("Select project", choices)
+    return _parse_id(selected) if selected else None
+
+
+def _interactive_select_environment(api, project_id):
+    if not project_id:
+        return None
+    try:
+        projects = api.list_projects().get("projects", [])
+    except Exception:
+        return None
+    env_choices = []
+    for p in projects:
+        if p["id"] == project_id:
+            env_choices = [f"{e['slug']} | {e['name']}" for e in p.get("environments", [])]
+            break
+    if not env_choices:
+        return None
+    selected = _select_from_choices("Select environment", env_choices)
+    return _parse_id(selected) if selected else None
+
+
+def _interactive_select_identity_id(api, org_id):
+    if not org_id:
+        return None
+    try:
+        identities = api.list_identities(org_id).get("identities", [])
+    except Exception:
+        return None
+    if not identities:
+        return None
+    choices = [
+        f"{i.get('identityId', i.get('id'))} | {i.get('identity', {}).get('name', 'unknown')}"
+        for i in identities
+    ]
+    selected = _select_from_choices("Select machine identity", choices)
+    return _parse_id(selected) if selected else None
 
 
 def _load_local_inf_silent():
@@ -286,17 +358,21 @@ def cmd_init_token(args):
 
 
 def cmd_init_folder(args):
+    token = get_token_or_exit()
+    base_url = get_base_url_or_exit()
+    api = InfisicalAPI(base_url, token)
+
     org_id = _parse_id(args.org_id) if args.org_id else None
     project_id = _parse_id(args.project_id) if args.project_id else None
     environment = args.environment or "dev"
 
     if not args.yes:
         if not org_id:
-            org_id = _parse_id(prompt("Organization ID"))
+            org_id = _interactive_select_org_id(api) or _parse_id(prompt("Organization ID"))
         if not project_id:
-            project_id = _parse_id(prompt("Project ID"))
+            project_id = _interactive_select_project_id(api) or _parse_id(prompt("Project ID"))
         if not environment:
-            environment = prompt("Environment", default="dev")
+            environment = _interactive_select_environment(api, project_id) or prompt("Environment", default="dev")
     else:
         if not org_id:
             print("Error: --org-id is required with --yes")
@@ -343,11 +419,11 @@ def cmd_create_project(args):
         if not slug:
             slug = prompt("Slug", default=project_name)
         if not org_id:
-            org_id = _parse_id(prompt("Organization ID"))
+            org_id = _interactive_select_org_id(api) or _parse_id(prompt("Organization ID"))
         add_identity = input("Add machine identity? [y/N]: ").strip().lower()
         if add_identity == "y":
             if not identity_id:
-                identity_id = _parse_id(prompt("Machine identity ID"))
+                identity_id = _interactive_select_identity_id(api, org_id) or _parse_id(prompt("Machine identity ID"))
             if not role:
                 role = prompt(f"Role ({', '.join(VALID_ROLES)})", default="member")
     else:
@@ -437,7 +513,7 @@ def cmd_list_identities(args):
     _warn_local_override(args, "org_id", "orgId")
     org_id = _parse_id(args.org_id) or _get_default_with_local_override("orgId")
     if not org_id:
-        org_id = _parse_id(prompt("Organization ID"))
+        org_id = _interactive_select_org_id(api) or _parse_id(prompt("Organization ID"))
 
     result = api.list_identities(org_id)
     identities = result.get("identities", [])
@@ -578,10 +654,12 @@ def cmd_show_env(args):
 
     if not project_id:
         if not args.yes:
-            project_id = _parse_id(prompt("Project ID"))
+            project_id = _interactive_select_project_id(api) or _parse_id(prompt("Project ID"))
         else:
             print("Error: --project-id is required with --yes (or set default with: infisical-utils set-default --type projectId --value <id>)")
             raise SystemExit(1)
+    if not args.environment and not _get_default_with_local_override("environment") and not args.yes:
+        environment = _interactive_select_environment(api, project_id) or environment
 
     result = api.list_secrets(project_id, environment)
     secrets = result.get("secrets", [])
@@ -605,10 +683,12 @@ def cmd_get_env(args):
 
     if not project_id:
         if not args.yes:
-            project_id = _parse_id(prompt("Project ID"))
+            project_id = _interactive_select_project_id(api) or _parse_id(prompt("Project ID"))
         else:
             print("Error: --project-id is required with --yes (or set default with: infisical-utils set-default --type projectId --value <id>)")
             raise SystemExit(1)
+    if not args.environment and not _get_default_with_local_override("environment") and not args.yes:
+        environment = _interactive_select_environment(api, project_id) or environment
 
     result = api.list_secrets(project_id, environment)
     secrets = result.get("secrets", [])
@@ -633,10 +713,12 @@ def cmd_update_env(args):
 
     if not project_id:
         if not args.yes:
-            project_id = _parse_id(prompt("Project ID"))
+            project_id = _interactive_select_project_id(api) or _parse_id(prompt("Project ID"))
         else:
             print("Error: --project-id is required with --yes (or set default with: infisical-utils set-default --type projectId --value <id>)")
             raise SystemExit(1)
+    if not args.environment and not _get_default_with_local_override("environment") and not args.yes:
+        environment = _interactive_select_environment(api, project_id) or environment
 
     updates = []
     set_items = args.set or []
@@ -710,10 +792,12 @@ def cmd_show_env_history(args):
 
     if not project_id:
         if not args.yes:
-            project_id = _parse_id(prompt("Project ID"))
+            project_id = _interactive_select_project_id(api) or _parse_id(prompt("Project ID"))
         else:
             print("Error: --project-id is required with --yes")
             raise SystemExit(1)
+    if not args.environment and not _get_default_with_local_override("environment") and not args.yes:
+        environment = _interactive_select_environment(api, project_id) or environment
 
     if not secret_name:
         if not args.yes:
@@ -761,10 +845,12 @@ def cmd_rollback_env(args):
 
     if not project_id:
         if not args.yes:
-            project_id = _parse_id(prompt("Project ID"))
+            project_id = _interactive_select_project_id(api) or _parse_id(prompt("Project ID"))
         else:
             print("Error: --project-id is required with --yes")
             raise SystemExit(1)
+    if not args.environment and not _get_default_with_local_override("environment") and not args.yes:
+        environment = _interactive_select_environment(api, project_id) or environment
 
     if not secret_name:
         if not args.yes:
