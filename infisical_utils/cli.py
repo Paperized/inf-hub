@@ -231,9 +231,9 @@ def cmd_init_folder(args):
 
     if not args.yes:
         if not org_id:
-            org_id = prompt("Organization ID")
+            org_id = _parse_id(prompt("Organization ID"))
         if not project_id:
-            project_id = prompt("Project ID")
+            project_id = _parse_id(prompt("Project ID"))
         if not environment:
             environment = prompt("Environment", default="dev")
     else:
@@ -282,11 +282,11 @@ def cmd_create_project(args):
         if not slug:
             slug = prompt("Slug", default=project_name)
         if not org_id:
-            org_id = prompt("Organization ID")
+            org_id = _parse_id(prompt("Organization ID"))
         add_identity = input("Add machine identity? [y/N]: ").strip().lower()
         if add_identity == "y":
             if not identity_id:
-                identity_id = prompt("Machine identity ID")
+                identity_id = _parse_id(prompt("Machine identity ID"))
             if not role:
                 role = prompt(f"Role ({', '.join(VALID_ROLES)})", default="member")
     else:
@@ -384,7 +384,7 @@ def cmd_list_identities(args):
     _warn_local_override(args, "org_id", "orgId")
     org_id = _parse_id(args.org_id) or _get_default_with_local_override("orgId")
     if not org_id:
-        org_id = prompt("Organization ID")
+        org_id = _parse_id(prompt("Organization ID"))
 
     result = api.list_identities(org_id)
     identities = result.get("identities", [])
@@ -412,6 +412,8 @@ def cmd_set_default(args):
         raise SystemExit(1)
 
     if value:
+        if dtype in ("orgId", "identityId", "projectId"):
+            value = _parse_id(value)
         label = None
         try:
             token = get_token_or_exit()
@@ -526,7 +528,7 @@ def cmd_show_env(args):
 
     if not project_id:
         if not args.yes:
-            project_id = prompt("Project ID")
+            project_id = _parse_id(prompt("Project ID"))
         else:
             print("Error: --project-id is required with --yes (or set default with: infisical-utils set-default --type projectId --value <id>)")
             raise SystemExit(1)
@@ -560,7 +562,7 @@ def cmd_get_env(args):
 
     if not project_id:
         if not args.yes:
-            project_id = prompt("Project ID")
+            project_id = _parse_id(prompt("Project ID"))
         else:
             print("Error: --project-id is required with --yes (or set default with: infisical-utils set-default --type projectId --value <id>)")
             raise SystemExit(1)
@@ -588,7 +590,7 @@ def cmd_update_env(args):
 
     if not project_id:
         if not args.yes:
-            project_id = prompt("Project ID")
+            project_id = _parse_id(prompt("Project ID"))
         else:
             print("Error: --project-id is required with --yes (or set default with: infisical-utils set-default --type projectId --value <id>)")
             raise SystemExit(1)
@@ -641,7 +643,7 @@ def cmd_show_env_history(args):
 
     if not project_id:
         if not args.yes:
-            project_id = prompt("Project ID")
+            project_id = _parse_id(prompt("Project ID"))
         else:
             print("Error: --project-id is required with --yes")
             raise SystemExit(1)
@@ -692,7 +694,7 @@ def cmd_rollback_env(args):
 
     if not project_id:
         if not args.yes:
-            project_id = prompt("Project ID")
+            project_id = _parse_id(prompt("Project ID"))
         else:
             print("Error: --project-id is required with --yes")
             raise SystemExit(1)
