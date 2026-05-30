@@ -313,15 +313,25 @@ def get_base_url_or_exit():
 
 
 def prompt(label, secret=False, default=None):
-    suffix = f" [{default}]" if default else ""
-    if secret:
-        value = getpass.getpass(f"{label}{suffix}: ")
+    if HAS_QUESTIONARY:
+        if secret:
+            value = questionary.password(label).ask()
+        else:
+            value = questionary.text(label, default=default or "").ask()
+            if value is None:
+                value = ""
     else:
-        value = input(f"{label}{suffix}: ")
+        suffix = f" [{default}]" if default else ""
+        if secret:
+            value = getpass.getpass(f"{label}{suffix}: ")
+        else:
+            value = input(f"{label}{suffix}: ")
     return value.strip() if value.strip() else default
 
 
 def confirm(message):
+    if HAS_QUESTIONARY:
+        return bool(questionary.confirm(message, default=False).ask())
     response = input(f"{message} [y/N]: ")
     return response.lower() in ("y", "yes")
 
@@ -358,9 +368,15 @@ def cmd_init_token(args):
 
 
 def cmd_init_folder(args):
-    token = get_token_or_exit()
-    base_url = get_base_url_or_exit()
-    api = InfisicalAPI(base_url, token)
+    api = None
+    try:
+        base_url = os.environ.get("INFISICAL_API_URL")
+        token = get_token_or_exit() if base_url else None
+        if base_url and token:
+            api = InfisicalAPI(base_url, token)
+    except Exception:
+        # Folder init can still proceed with manual inputs if API/bootstrap is unavailable.
+        api = None
 
     org_id = _parse_id(args.org_id) if args.org_id else None
     project_id = _parse_id(args.project_id) if args.project_id else None
@@ -420,8 +436,8 @@ def cmd_create_project(args):
             slug = prompt("Slug", default=project_name)
         if not org_id:
             org_id = _interactive_select_org_id(api) or _parse_id(prompt("Organization ID"))
-        add_identity = input("Add machine identity? [y/N]: ").strip().lower()
-        if add_identity == "y":
+        add_identity = confirm("Add machine identity?")
+        if add_identity:
             if not identity_id:
                 identity_id = _interactive_select_identity_id(api, org_id) or _parse_id(prompt("Machine identity ID"))
             if not role:
@@ -449,8 +465,7 @@ def cmd_create_project(args):
         print(f"  Organization: {org_id}")
         if identity_id:
             print(f"  Identity:     {identity_id} (role: {role})")
-        confirm = input("\nProceed? [Y/n]: ").strip().lower()
-        if confirm == "n":
+        if not confirm("Proceed?"):
             print("Aborted.")
             return
 
