@@ -105,6 +105,21 @@ infisical-utils show-env-history --name "API_KEY"
 infisical-utils rollback-env --name "API_KEY" --version 2 --yes
 ```
 
+## Docker Compose Integration (`iu-dc`)
+
+Shell function that fetches secrets into a temporary `.env.inf` and runs `docker compose`:
+
+```bash
+iu-dc() {
+    [ -f .inf ] || { echo "Error: not an infisical-utils project" >&2; return 1; }
+    trap 'rm -f .env.inf' EXIT INT TERM
+    infisical-utils get-env -y > .env.inf || return 1
+    docker compose --env-file .env.inf "$@"
+}
+```
+
+Usage: `iu-dc up -d`, `iu-dc down`, `iu-dc exec app cmd`, etc. The `.env.inf` is cleaned up automatically. Docker Compose files in `.inf`-enabled folders should use `env_file: .env.inf`.
+
 ## Interactive Mode
 
 Without `--yes`, commands use interactive terminal flows:

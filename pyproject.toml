@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "infisical-utils"
-version = "0.1.2"
+version = "0.1.4"
 description = "CLI utilities for Infisical with advanced features"
 readme = "README.md"
 requires-python = ">=3.10"

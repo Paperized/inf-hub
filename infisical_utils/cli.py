@@ -442,6 +442,8 @@ def cmd_create_project(args):
                 identity_id = _interactive_select_identity_id(api, org_id) or _parse_id(prompt("Machine identity ID"))
             if not role:
                 role = prompt(f"Role ({', '.join(VALID_ROLES)})", default="member")
+        else:
+            identity_id = None
     else:
         if not project_name:
             print("Error: --name is required with --yes")

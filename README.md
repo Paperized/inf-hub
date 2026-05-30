@@ -174,6 +174,35 @@ infisical-utils show-env-history --name "API_KEY"
 infisical-utils rollback-env --name "API_KEY" --version 2 --yes
 ```
 
+### Docker Compose Integration (`iu-dc`)
+
+Shell function (add to `.zshrc` / `.bashrc`) that fetches secrets into a temporary `.env.inf` and runs `docker compose`:
+
+```bash
+iu-dc() {
+    [ -f .inf ] || { echo "Error: not an infisical-utils project" >&2; return 1; }
+    trap 'rm -f .env.inf' EXIT INT TERM
+    infisical-utils get-env -y > .env.inf || return 1
+    docker compose --env-file .env.inf "$@"
+}
+```
+
+Usage:
+
+```bash
+iu-dc up -d
+iu-dc down
+iu-dc exec app python manage.py migrate
+```
+
+The `.env.inf` file is cleaned up automatically (even on Ctrl+C). Docker Compose files in `.inf`-enabled folders should reference `env_file: .env.inf` instead of `.env`.
+
+**Zsh completion:**
+
+```bash
+compdef iu-dc=docker
+```
+
 ## Configuration
 
 Global config file: `~/.config/infisical-utils/config.json`
