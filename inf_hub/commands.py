@@ -93,6 +93,16 @@ def _interactive_identity_id(api, org_id: str) -> str | None:
     return parse_id(ui.autocomplete_choice("Select machine identity", choices))
 
 
+def _resolve_project_name(api, project_id: str) -> str:
+    try:
+        p = api.resolve_project(project_id)
+        if p and p.get("name"):
+            return str(p["name"])
+    except Exception:
+        pass
+    return ""
+
+
 def _interactive_secret_name(api, project_id: str, environment: str, allow_new: bool = False) -> tuple[str, bool]:
     secrets = api.list_secrets(project_id, environment).get("secrets", [])
     keys = sorted([s.get("secretKey") for s in secrets if s.get("secretKey")])
@@ -203,9 +213,12 @@ def cmd_init_folder(args: Namespace) -> None:
             project_id = _interactive_project_id(api)
         if not args.environment:
             environment = _interactive_environment(api, project_id)
+        project_name = _resolve_project_name(api, project_id) if project_id else ""
     else:
         if not token_id or not project_id:
             raise ValidationError("--token-id and --project-id are required with --yes")
+        api, _entry = build_api_for_token(token_id)
+        project_name = _resolve_project_name(api, project_id)
 
     if not token_id or not project_id:
         raise ValidationError("tokenId and projectId are required")
@@ -213,8 +226,8 @@ def cmd_init_folder(args: Namespace) -> None:
     if not args.yes:
         ui.print_table(
             "Pending local context initialization",
-            ["tokenId", "projectId", "environment"],
-            [[token_id, project_id, environment]],
+            ["tokenId", "projectName", "projectId", "environment"],
+            [[token_id, project_name, project_id, environment]],
         )
     if not args.yes and not ui.confirm("Proceed with local repository initialization?"):
         ui.print_line("Aborted.")
@@ -440,6 +453,7 @@ def cmd_rollback(args: Namespace) -> None:
     token_id = _require_token_id(args, allow_prompt=not args.yes)
     api, _entry = build_api_for_token(token_id)
     project_id, environment = resolve_target(api, args, _interactive_project_id, _interactive_environment)
+    project_name = _resolve_project_name(api, project_id)
 
     secret_name = args.name
     if not secret_name:
@@ -470,9 +484,10 @@ def cmd_rollback(args: Namespace) -> None:
     if not args.yes:
         ui.print_table(
             "Pending rollback",
-            ["tokenId", "projectId", "environment", "secret", "current", "selected", "action"],
+            ["tokenId", "projectName", "projectId", "environment", "secret", "current", "selected", "action"],
             [[
                 token_id,
+                project_name,
                 project_id,
                 environment,
                 secret_name,
