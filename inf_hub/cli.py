@@ -18,8 +18,6 @@ from inf_hub.api import InfisicalAPI
 from inf_hub.config import (
     CONFIG_FILE,
     DEFAULT_TYPES,
-    GLOBAL_TYPES,
-    get_global,
     get_org_ids,
     get_orgs_or_exit,
     get_token_for_org_or_exit,
@@ -27,14 +25,12 @@ from inf_hub.config import (
     load_local_inf,
     load_orgs,
     load_token_for_org,
-    remove_global,
     remove_local_value,
     save_config,
     save_local_inf,
     save_org,
     save_token_secure,
     save_token_for_org,
-    set_global,
     set_local_value,
 )
 
@@ -145,7 +141,7 @@ def _effective_value(key, explicit=None):
     local_inf = _load_local_inf_or_exit()
     if local_inf is not None and local_inf.get(key):
         return local_inf.get(key)
-    return get_global(key)
+    return None
 
 
 def _warn_local_override(local_key, explicit):
@@ -534,20 +530,13 @@ def cmd_set(args):
     if dtype in ("orgId", "identityId", "projectId"):
         value = _parse_id(value)
 
-    if args.global_scope:
-        if dtype not in GLOBAL_TYPES:
-            _print(f"Error: only {', '.join(GLOBAL_TYPES)} can be set globally. {dtype} is org-specific.")
+    if dtype == "orgId":
+        org_ids = get_org_ids()
+        if org_ids and value not in org_ids:
+            _print(f"Error: organization '{value}' not found in configured orgs. Run 'ih init token' to add it.")
             raise SystemExit(1)
-        if dtype == "orgId":
-            org_ids = get_org_ids()
-            if org_ids and value not in org_ids:
-                _print(f"Error: organization '{value}' not found in configured orgs. Run 'ih init token' to add it.")
-                raise SystemExit(1)
-        set_global(dtype, value)
-        _print(f"Global {dtype} set to: {value}")
-    else:
-        set_local_value(dtype, value)
-        _print(f"Local {dtype} set to: {value}")
+    set_local_value(dtype, value)
+    _print(f"Local {dtype} set to: {value}")
 
 
 def cmd_unset(args):
@@ -555,15 +544,8 @@ def cmd_unset(args):
     if dtype not in DEFAULT_TYPES:
         _print(f"Error: invalid type '{dtype}'. Must be one of: {', '.join(DEFAULT_TYPES)}")
         raise SystemExit(1)
-    if args.global_scope:
-        if dtype not in GLOBAL_TYPES:
-            _print(f"Error: only {', '.join(GLOBAL_TYPES)} can be set globally. {dtype} is org-specific.")
-            raise SystemExit(1)
-        remove_global(dtype)
-        _print(f"Global {dtype} removed.")
-    else:
-        remove_local_value(dtype)
-        _print(f"Local {dtype} removed.")
+    remove_local_value(dtype)
+    _print(f"Local {dtype} removed.")
 
 
 def _resolve_target(api, args):
@@ -796,11 +778,9 @@ def main():
     p_set = sub.add_parser("set", help="Set context value")
     p_set.add_argument("type", choices=DEFAULT_TYPES, help="Value type")
     a = p_set.add_argument("--value", help="Value")
-    p_set.add_argument("--global", dest="global_scope", action="store_true", help="Set global value")
 
     p_unset = sub.add_parser("unset", help="Unset context value")
     p_unset.add_argument("type", choices=DEFAULT_TYPES, help="Value type")
-    p_unset.add_argument("--global", dest="global_scope", action="store_true", help="Unset global value")
 
     p_pull = sub.add_parser("pull", help="Pull env from remote")
     a = p_pull.add_argument("--org-id", help="Organization ID")
