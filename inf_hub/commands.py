@@ -462,12 +462,31 @@ def cmd_rollback(args: Namespace) -> None:
     except ValueError as exc:
         raise ValidationError(f"invalid version '{version}'") from exc
 
+    current = api.get_secret(project_id, environment, secret_name).get("secret", {})
+    current_value = str(current.get("secretValue", ""))
+    selected = api.get_secret(project_id, environment, secret_name, version=version_num).get("secret", {})
+    selected_value = str(selected.get("secretValue", ""))
+
     if not args.yes:
         ui.print_table(
             "Pending rollback",
-            ["tokenId", "projectId", "environment", "secret", "version"],
-            [[token_id, project_id, environment, secret_name, str(version_num)]],
+            ["tokenId", "projectId", "environment", "secret", "current", "selected", "action"],
+            [[
+                token_id,
+                project_id,
+                environment,
+                secret_name,
+                current_value,
+                selected_value,
+                "IGNORE" if current_value == selected_value else "APPLY",
+            ]],
         )
+    if current_value == selected_value:
+        ui.print_line(
+            f"Rollback ignored for '{secret_name}' in {environment}: selected version v{version_num} is unchanged."
+        )
+        return
+
     if not args.yes and not ui.confirm(f"Rollback '{secret_name}' to version {version_num}?"):
         ui.print_line("Aborted.")
         return
