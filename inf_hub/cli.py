@@ -191,6 +191,59 @@ def _confirm(message):
     return input(f"{message} [y/N]: ").lower() in ("y", "yes")
 
 
+def _secret_keys(api, project_id, environment):
+    secrets = api.list_secrets(project_id, environment).get("secrets", [])
+    return sorted([s.get("secretKey") for s in secrets if s.get("secretKey")])
+
+
+def _interactive_secret_name(api, project_id, environment, allow_new=False):
+    keys = _secret_keys(api, project_id, environment)
+    if not keys and not allow_new:
+        _print("Error: no secrets found in selected environment.")
+        raise SystemExit(1)
+
+    if HAS_QUESTIONARY:
+        if allow_new:
+            choices = keys + ["+ Create new secret"]
+            selected = questionary.autocomplete(
+                "Select secret name",
+                choices=choices,
+                validate=lambda text: text in choices or "Choose a value from autocomplete list",
+            ).ask()
+            if selected is None:
+                raise KeyboardInterrupt
+            if selected == "+ Create new secret":
+                new_name = _prompt("New secret name")
+                if not new_name:
+                    _print("Error: secret name is required.")
+                    raise SystemExit(1)
+                return new_name, True
+            return selected, False
+
+        selected = questionary.autocomplete(
+            "Select secret name",
+            choices=keys,
+            validate=lambda text: text in keys or "Choose a value from autocomplete list",
+        ).ask()
+        if selected is None:
+            raise KeyboardInterrupt
+        return selected, False
+
+    if allow_new:
+        choices = keys + ["+ Create new secret"]
+        selected = _select("Select secret name", choices)
+        if selected == "+ Create new secret":
+            new_name = _prompt("New secret name")
+            if not new_name:
+                _print("Error: secret name is required.")
+                raise SystemExit(1)
+            return new_name, True
+        return selected, False
+
+    selected = _select("Select secret name", keys)
+    return selected, False
+
+
 def _interactive_org_id():
     orgs = get_orgs_or_exit()
     if len(orgs) == 1:
@@ -570,6 +623,13 @@ def cmd_push(args):
     if has_inline:
         updates = _pair_updates(args.k or [], args.v or [])
         source_desc = "inline key/value input"
+    elif not has_file and not args.yes:
+        secret_name, is_new = _interactive_secret_name(api, project_id, environment, allow_new=True)
+        secret_value = _prompt("Secret value", secret=True)
+        updates = [(secret_name, secret_value)]
+        source_desc = "interactive input"
+        if is_new:
+            _print(f"New secret selected: {secret_name}")
     else:
         path = args.file or ".env"
         try:
@@ -604,7 +664,15 @@ def cmd_push(args):
             else:
                 raise
 
+    out_file = args.file or ".env"
+    synced_local = False
+    if Path(out_file).exists():
+        secrets = api.list_secrets(project_id, environment).get("secrets", [])
+        _write_env_file(out_file, secrets)
+        synced_local = True
     _print(f"Pushed {len(updates)} secrets to Env: {environment} from {source_desc}.")
+    if synced_local:
+        _print(f"Updated local file: {out_file}.")
 
 
 def cmd_history(args):
@@ -619,7 +687,7 @@ def cmd_history(args):
         if args.yes:
             _print("Error: --name is required with --yes")
             raise SystemExit(1)
-        secret_name = _prompt("Secret name")
+        secret_name, _ = _interactive_secret_name(api, project_id, environment, allow_new=False)
 
     result = api.get_secret(project_id, environment, secret_name)
     current_version = result.get("secret", {}).get("version", 1)
@@ -648,7 +716,7 @@ def cmd_rollback(args):
         if args.yes:
             _print("Error: --name is required with --yes")
             raise SystemExit(1)
-        secret_name = _prompt("Secret name")
+        secret_name, _ = _interactive_secret_name(api, project_id, environment, allow_new=False)
     if not version:
         if args.yes:
             _print("Error: --version is required with --yes")
@@ -670,10 +738,15 @@ def cmd_rollback(args):
 
     api.update_secret(project_id, environment, secret_name, old_value)
 
-    secrets = api.list_secrets(project_id, environment).get("secrets", [])
-    _write_env_file(out_file, secrets)
+    synced_local = False
+    if Path(out_file).exists():
+        secrets = api.list_secrets(project_id, environment).get("secrets", [])
+        _write_env_file(out_file, secrets)
+        synced_local = True
 
-    _print(f"Rolled back secret '{secret_name}' to version {version} in Env: {environment}; synced local file: {out_file}.")
+    _print(f"Rolled back secret '{secret_name}' to version {version} in Env: {environment}.")
+    if synced_local:
+        _print(f"Updated local file: {out_file}.")
 
 
 def main():
