@@ -17,7 +17,7 @@ from inf_hub.config import (
 )
 from inf_hub.errors import ConfigError, ValidationError
 from inf_hub.models import SecretUpdate
-from inf_hub.runtime import build_api_for_org, get_api_for_org_silent, parse_id, resolve_org_id
+from inf_hub.runtime import build_api_for_org, parse_id, resolve_org_id
 from inf_hub import ui
 from inf_hub.services import (
     pair_updates,
@@ -163,7 +163,7 @@ def cmd_init_folder(args: Namespace) -> None:
     if not args.yes:
         if not org_id:
             org_id = _interactive_org_id()
-        api = get_api_for_org_silent(org_id)
+        api = build_api_for_org(org_id)
         if not project_id:
             project_id = (_interactive_project_id(api) if api else None) or parse_id(ui.prompt("Project ID"))
         if not args.environment:
@@ -255,18 +255,18 @@ def cmd_set(args: Namespace) -> None:
         raise ValidationError(f"invalid type '{args.type}'. Must be one of: {', '.join(DEFAULT_TYPES)}")
     value = args.value
     if not value:
-        org_id = _require_org(args, allow_prompt=True)
-        api = build_api_for_org(org_id)
         if args.type == "orgId":
             value = _interactive_org_id()
-        elif args.type == "projectId":
-            value = _interactive_project_id(api)
-        elif args.type == "environment":
-            proj = _interactive_project_id(api)
-            value = _interactive_environment(api, proj) if proj else None
-        elif args.type == "identityId":
-            value = _interactive_identity_id(api, org_id)
-
+        else:
+            org_id = _require_org(args, allow_prompt=True)
+            api = build_api_for_org(org_id)
+            if args.type == "projectId":
+                value = _interactive_project_id(api)
+            elif args.type == "environment":
+                proj = _interactive_project_id(api)
+                value = _interactive_environment(api, proj) if proj else None
+            elif args.type == "identityId":
+                value = _interactive_identity_id(api, org_id)
     if not value:
         raise ValidationError("value is required. Use --value or run in interactive mode.")
     if args.type in ("orgId", "projectId", "identityId"):
