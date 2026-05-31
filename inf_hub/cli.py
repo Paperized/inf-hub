@@ -34,7 +34,6 @@ def build_parser() -> argparse.ArgumentParser:
     p_register_token = register_sub.add_parser("token", help="Register API token")
     p_register_token.add_argument("--token", help="Infisical API token")
     p_register_token.add_argument("--token-id", help="Unique token name")
-    p_register_token.add_argument("--org-name", help="Organization name (for display)")
     p_register_token.add_argument("--yes", "-y", action="store_true", help="Non-interactive")
     p_register_token.add_argument("--skip-checks", action="store_true", help="Reserved for compatibility")
 

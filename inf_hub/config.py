@@ -72,7 +72,6 @@ def load_tokens():
                 {
                     "tokenId": tid,
                     "orgId": entry.get("orgId", ""),
-                    "orgName": entry.get("orgName", entry.get("orgId", "")),
                 }
             )
     return tokens
@@ -89,7 +88,7 @@ def get_token_entry(token_id: str):
     return None
 
 
-def save_token_entry(token_id: str, org_id: str, org_name: str | None = None):
+def save_token_entry(token_id: str, org_id: str):
     config = load_config() or {}
     tokens = config.get("tokens", [])
     normalized = []
@@ -98,12 +97,12 @@ def save_token_entry(token_id: str, org_id: str, org_name: str | None = None):
         if not isinstance(entry, dict):
             continue
         if entry.get("tokenId") == token_id:
-            normalized.append({"tokenId": token_id, "orgId": org_id, "orgName": org_name or entry.get("orgName", org_id)})
+            normalized.append({"tokenId": token_id, "orgId": org_id})
             found = True
         else:
             normalized.append(entry)
     if not found:
-        normalized.append({"tokenId": token_id, "orgId": org_id, "orgName": org_name or org_id})
+        normalized.append({"tokenId": token_id, "orgId": org_id})
     config["tokens"] = normalized
     save_config(config)
 

@@ -52,7 +52,7 @@ def _extract_org_info_from_token(token: str | None) -> tuple[str | None, str | N
 
 def _interactive_token_id() -> str:
     tokens = get_tokens_or_exit()
-    choices = [f"{t['tokenId']} | {t.get('orgName', t.get('orgId', ''))}" for t in tokens]
+    choices = [f"{t['tokenId']} | {t.get('orgId', '')}" for t in tokens]
     return parse_id(ui.autocomplete_choice("Select token", choices)) or ""
 
 
@@ -123,12 +123,11 @@ def cmd_register_token(args: Namespace) -> None:
     ui.print_line("Configure ih")
     token = args.token
     token_id = parse_id(args.token_id) if args.token_id else None
-    org_name = args.org_name
 
     if not args.yes and not token:
         token = ui.prompt("Infisical token", secret=True)
 
-    org_id, token_org_name = _extract_org_info_from_token(token)
+    org_id, _token_org_name = _extract_org_info_from_token(token)
     if not org_id:
         raise ValidationError("cannot extract organization ID from token")
 
@@ -142,12 +141,8 @@ def cmd_register_token(args: Namespace) -> None:
     if token_id in get_token_ids():
         raise ValidationError(f"tokenId '{token_id}' already exists")
 
-    if not org_name and not args.yes:
-        org_name = ui.prompt("Organization name", default=token_org_name)
-    org_name = org_name or token_org_name or org_id
-
     save_token_for_token_id(token_id, token)
-    save_token_entry(token_id, org_id, org_name)
+    save_token_entry(token_id, org_id)
     cfg = load_config() or {}
     cfg.pop("token", None)
     save_config(cfg)
@@ -242,7 +237,7 @@ def cmd_create_project(args: Namespace) -> None:
 def cmd_list_orgs(_: Namespace) -> None:
     tokens = get_tokens_or_exit()
     for t in tokens:
-        ui.print_line(f"{t['tokenId']} | {t.get('orgName', '')} | orgId={t.get('orgId', '')}")
+        ui.print_line(f"{t.get('orgId', '')} | {t['tokenId']}")
 
 
 def cmd_list_projects(args: Namespace) -> None:
