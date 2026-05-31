@@ -38,7 +38,7 @@ def print_table(title: str, columns: list[str], rows: list[list[str]]) -> None:
 
 def select(message: str, choices: Sequence[str]) -> str:
     if HAS_QUESTIONARY:
-        result = questionary.select(message, choices=list(choices)).ask()
+        result = questionary.select(message, choices=list(choices)).ask(kbi_msg="")
         if result is None:
             raise InteractiveAbort("Operation cancelled")
         return result
@@ -56,7 +56,7 @@ def select(message: str, choices: Sequence[str]) -> str:
 
 def autocomplete_choice(message: str, choices: Sequence[str]) -> str:
     if HAS_QUESTIONARY:
-        result = questionary.select(message, choices=list(choices)).ask()
+        result = questionary.select(message, choices=list(choices)).ask(kbi_msg="")
         if result is None:
             raise InteractiveAbort("Operation cancelled")
         return result
@@ -66,11 +66,11 @@ def autocomplete_choice(message: str, choices: Sequence[str]) -> str:
 def prompt(label: str, secret: bool = False, default: str | None = None) -> str:
     if HAS_QUESTIONARY:
         if secret:
-            value = questionary.password(label).ask()
+            value = questionary.password(label).ask(kbi_msg="")
             if value is None:
                 raise InteractiveAbort("Operation cancelled")
             return (value or "").strip()
-        value = questionary.text(label, default=default or "").ask()
+        value = questionary.text(label, default=default or "").ask(kbi_msg="")
         if value is None:
             raise InteractiveAbort("Operation cancelled")
         return (value or "").strip() or (default or "")
@@ -86,7 +86,7 @@ def prompt(label: str, secret: bool = False, default: str | None = None) -> str:
 
 def confirm(message: str) -> bool:
     if HAS_QUESTIONARY:
-        result = questionary.confirm(message, default=False).ask()
+        result = questionary.confirm(message, default=False).ask(kbi_msg="")
         if result is None:
             raise InteractiveAbort("Operation cancelled")
         return bool(result)
