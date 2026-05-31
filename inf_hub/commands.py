@@ -2,23 +2,26 @@ import base64
 import json
 from argparse import Namespace
 
+from inf_hub import ui
 from inf_hub.config import (
     CONFIG_FILE,
     DEFAULT_TYPES,
-    get_org_ids,
-    get_orgs_or_exit,
+    delete_token_for_token_id,
+    get_token_entry,
+    get_token_ids,
+    get_tokens_or_exit,
     load_config,
     remove_local_value,
+    remove_token_entry,
     save_config,
     save_local_inf,
-    save_org,
-    save_token_for_org,
+    save_token_entry,
+    save_token_for_token_id,
     set_local_value,
 )
-from inf_hub.errors import ConfigError, ValidationError
+from inf_hub.errors import ValidationError
 from inf_hub.models import SecretUpdate
-from inf_hub.runtime import build_api_for_org, parse_id, resolve_org_id
-from inf_hub import ui
+from inf_hub.runtime import build_api_for_token, parse_id, resolve_token_id
 from inf_hub.services import (
     pair_updates,
     parse_env_file,
@@ -47,12 +50,12 @@ def _extract_org_info_from_token(token: str | None) -> tuple[str | None, str | N
         return None, None
 
 
-def _interactive_org_id() -> str:
-    orgs = get_orgs_or_exit()
-    if len(orgs) == 1:
-        return orgs[0]["id"]
-    choices = [f"{o['id']} | {o['name']}" for o in orgs]
-    return parse_id(ui.autocomplete_choice("Select organization", choices)) or ""
+def _interactive_token_id() -> str:
+    tokens = get_tokens_or_exit()
+    if len(tokens) == 1:
+        return tokens[0]["tokenId"]
+    choices = [f"{t['tokenId']} | {t.get('orgName', t.get('orgId', ''))}" for t in tokens]
+    return parse_id(ui.autocomplete_choice("Select token", choices)) or ""
 
 
 def _interactive_project_id(api) -> str | None:
@@ -111,81 +114,97 @@ def _interactive_secret_name(api, project_id: str, environment: str, allow_new: 
     return ui.autocomplete_choice("Select secret name", keys), False
 
 
-def _require_org(args: Namespace, allow_prompt: bool) -> str:
-    org_id = resolve_org_id(args, allow_prompt=allow_prompt, interactive_org_selector=_interactive_org_id)
-    if not org_id:
-        raise ValidationError("orgId is required")
-    return org_id
+def _require_token_id(args: Namespace, allow_prompt: bool) -> str:
+    token_id = resolve_token_id(args, allow_prompt=allow_prompt, interactive_token_selector=_interactive_token_id)
+    if not token_id:
+        raise ValidationError("tokenId is required")
+    return token_id
 
 
-def cmd_init_token(args: Namespace) -> None:
+def cmd_register_token(args: Namespace) -> None:
     ui.print_line("Configure ih")
     token = args.token
-    org_id = parse_id(args.org_id) if args.org_id else None
+    token_id = parse_id(args.token_id) if args.token_id else None
     org_name = args.org_name
 
     if not args.yes and not token:
         token = ui.prompt("Infisical token", secret=True)
 
-    token_org_id, token_org_name = _extract_org_info_from_token(token)
-    if not args.yes and not org_id:
-        org_id = parse_id(ui.prompt("Organization ID", default=token_org_id))
-    if not args.yes and not org_name:
+    org_id, token_org_name = _extract_org_info_from_token(token)
+    if not org_id:
+        raise ValidationError("cannot extract organization ID from token")
+
+    if not args.yes and not token_id:
+        token_id = parse_id(ui.prompt("Token unique name"))
+    if args.yes and not token_id:
+        raise ValidationError("--token-id is required with --yes")
+    if not token_id:
+        raise ValidationError("tokenId is required")
+
+    if token_id in get_token_ids():
+        raise ValidationError(f"tokenId '{token_id}' already exists")
+
+    if not org_name and not args.yes:
         org_name = ui.prompt("Organization name", default=token_org_name)
+    org_name = org_name or token_org_name or org_id
 
-    if args.yes and not token:
-        raise ValidationError("--token is required with --yes")
-    if args.yes and not org_id:
-        raise ValidationError("--org-id is required with --yes")
-    if not token:
-        raise ValidationError("token is required")
-    if not org_id:
-        org_id = token_org_id
-    if not org_id:
-        raise ValidationError("organization ID is required")
-
-    if not args.skip_checks and token_org_id and token_org_id != org_id:
-        raise ValidationError(f"org-id '{org_id}' does not match token org-id '{token_org_id}'. Use --skip-checks to bypass this check.")
-
-    save_token_for_org(org_id, token)
-    save_org(org_id, org_name)
+    save_token_for_token_id(token_id, token)
+    save_token_entry(token_id, org_id, org_name)
     cfg = load_config() or {}
     cfg.pop("token", None)
     save_config(cfg)
-    ui.print_line(f"Token saved to secure keyring for org {org_id} ({org_name or org_id}). Global config: {CONFIG_FILE}")
+    ui.print_line(f"Token saved to secure keyring for tokenId {token_id} (orgId: {org_id}). Config: {CONFIG_FILE}")
+
+
+def cmd_unregister_token(args: Namespace) -> None:
+    token_id = parse_id(args.token_id) if args.token_id else None
+    if not token_id:
+        token_id = _interactive_token_id()
+    entry = get_token_entry(token_id)
+    if not entry:
+        raise ValidationError(f"tokenId '{token_id}' not found")
+
+    if not args.yes and not ui.confirm(f"Remove token '{token_id}' from config and keyring?"):
+        ui.print_line("Aborted.")
+        return
+
+    delete_token_for_token_id(token_id)
+    remove_token_entry(token_id)
+    ui.print_line(f"Unregistered token '{token_id}' (orgId: {entry.get('orgId', '')}).")
 
 
 def cmd_init_folder(args: Namespace) -> None:
-    org_id = parse_id(args.org_id) if args.org_id else None
+    token_id = parse_id(args.token_id) if args.token_id else None
     project_id = parse_id(args.project_id) if args.project_id else None
     environment = args.environment or "dev"
 
     if not args.yes:
-        if not org_id:
-            org_id = _interactive_org_id()
-        api = build_api_for_org(org_id)
+        if not token_id:
+            token_id = _interactive_token_id()
+        api, _entry = build_api_for_token(token_id)
         if not project_id:
             project_id = (_interactive_project_id(api) if api else None) or parse_id(ui.prompt("Project ID"))
         if not args.environment:
             environment = (_interactive_environment(api, project_id) if api else None) or ui.prompt("Environment", default="dev")
     else:
-        if not org_id or not project_id:
-            raise ValidationError("--org-id and --project-id are required with --yes")
+        if not token_id or not project_id:
+            raise ValidationError("--token-id and --project-id are required with --yes")
 
-    if not org_id or not project_id:
-        raise ValidationError("orgId and projectId are required")
+    if not token_id or not project_id:
+        raise ValidationError("tokenId and projectId are required")
 
     if not args.yes and not ui.confirm("Proceed with local repository initialization?"):
         ui.print_line("Aborted.")
         return
 
-    save_local_inf(org_id, project_id, environment)
+    save_local_inf(token_id, project_id, environment)
     ui.print_line(f"Initialized local repository context in .inf (Env: {environment}).")
 
 
 def cmd_create_project(args: Namespace) -> None:
-    org_id = _require_org(args, allow_prompt=not args.yes)
-    api = build_api_for_org(org_id)
+    token_id = _require_token_id(args, allow_prompt=not args.yes)
+    api, entry = build_api_for_token(token_id)
+    org_id = entry["orgId"]
     name = args.name
     slug = args.slug
     identity_id = parse_id(args.identity_id)
@@ -223,14 +242,14 @@ def cmd_create_project(args: Namespace) -> None:
 
 
 def cmd_list_orgs(_: Namespace) -> None:
-    orgs = get_orgs_or_exit()
-    for org in orgs:
-        ui.print_line(f"{org['id']} | {org['name']}")
+    tokens = get_tokens_or_exit()
+    for t in tokens:
+        ui.print_line(f"{t['tokenId']} | {t.get('orgName', '')} | orgId={t.get('orgId', '')}")
 
 
 def cmd_list_projects(args: Namespace) -> None:
-    org_id = _require_org(args, allow_prompt=not getattr(args, "yes", False))
-    api = build_api_for_org(org_id)
+    token_id = _require_token_id(args, allow_prompt=not getattr(args, "yes", False))
+    api, _entry = build_api_for_token(token_id)
     projects = api.list_projects().get("projects", [])
     if not projects:
         ui.print_line("No projects found.")
@@ -240,9 +259,9 @@ def cmd_list_projects(args: Namespace) -> None:
 
 
 def cmd_list_identities(args: Namespace) -> None:
-    org_id = _require_org(args, allow_prompt=not getattr(args, "yes", False))
-    api = build_api_for_org(org_id)
-    identities = api.list_identities(org_id).get("identities", [])
+    token_id = _require_token_id(args, allow_prompt=not getattr(args, "yes", False))
+    api, entry = build_api_for_token(token_id)
+    identities = api.list_identities(entry["orgId"]).get("identities", [])
     if not identities:
         ui.print_line("No identities found.")
         return
@@ -255,26 +274,26 @@ def cmd_set(args: Namespace) -> None:
         raise ValidationError(f"invalid type '{args.type}'. Must be one of: {', '.join(DEFAULT_TYPES)}")
     value = args.value
     if not value:
-        if args.type == "orgId":
-            value = _interactive_org_id()
+        if args.type == "tokenId":
+            value = _interactive_token_id()
         else:
-            org_id = _require_org(args, allow_prompt=True)
-            api = build_api_for_org(org_id)
+            token_id = _require_token_id(args, allow_prompt=True)
+            api, entry = build_api_for_token(token_id)
             if args.type == "projectId":
                 value = _interactive_project_id(api)
             elif args.type == "environment":
                 proj = _interactive_project_id(api)
                 value = _interactive_environment(api, proj) if proj else None
             elif args.type == "identityId":
-                value = _interactive_identity_id(api, org_id)
+                value = _interactive_identity_id(api, entry["orgId"])
     if not value:
         raise ValidationError("value is required. Use --value or run in interactive mode.")
-    if args.type in ("orgId", "projectId", "identityId"):
+    if args.type in ("tokenId", "projectId", "identityId"):
         value = parse_id(value)
-    if args.type == "orgId":
-        org_ids = get_org_ids()
-        if org_ids and value not in org_ids:
-            raise ValidationError(f"organization '{value}' not found in configured orgs. Run 'ih init token' to add it.")
+    if args.type == "tokenId":
+        token_ids = get_token_ids()
+        if token_ids and value not in token_ids:
+            raise ValidationError(f"tokenId '{value}' not found in configured tokens. Run 'ih register token' to add it.")
 
     set_local_value(args.type, value)
     ui.print_line(f"Local {args.type} set to: {value}")
@@ -288,8 +307,8 @@ def cmd_unset(args: Namespace) -> None:
 
 
 def cmd_pull(args: Namespace) -> None:
-    org_id = _require_org(args, allow_prompt=not args.yes)
-    api = build_api_for_org(org_id)
+    token_id = _require_token_id(args, allow_prompt=not args.yes)
+    api, _entry = build_api_for_token(token_id)
     project_id, environment = resolve_target(api, args, _interactive_project_id, _interactive_environment)
     secrets = api.list_secrets(project_id, environment).get("secrets", [])
     if args.p:
@@ -303,8 +322,8 @@ def cmd_pull(args: Namespace) -> None:
 
 
 def cmd_push(args: Namespace) -> None:
-    org_id = _require_org(args, allow_prompt=not args.yes)
-    api = build_api_for_org(org_id)
+    token_id = _require_token_id(args, allow_prompt=not args.yes)
+    api, _entry = build_api_for_token(token_id)
     project_id, environment = resolve_target(api, args, _interactive_project_id, _interactive_environment)
 
     has_file = bool(args.file)
@@ -348,8 +367,8 @@ def cmd_push(args: Namespace) -> None:
 
 
 def cmd_history(args: Namespace) -> None:
-    org_id = _require_org(args, allow_prompt=not args.yes)
-    api = build_api_for_org(org_id)
+    token_id = _require_token_id(args, allow_prompt=not args.yes)
+    api, _entry = build_api_for_token(token_id)
     project_id, environment = resolve_target(api, args, _interactive_project_id, _interactive_environment)
 
     secret_name = args.name
@@ -371,8 +390,8 @@ def cmd_history(args: Namespace) -> None:
 
 
 def cmd_rollback(args: Namespace) -> None:
-    org_id = _require_org(args, allow_prompt=not args.yes)
-    api = build_api_for_org(org_id)
+    token_id = _require_token_id(args, allow_prompt=not args.yes)
+    api, _entry = build_api_for_token(token_id)
     project_id, environment = resolve_target(api, args, _interactive_project_id, _interactive_environment)
 
     secret_name = args.name

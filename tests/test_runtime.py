@@ -15,8 +15,8 @@ class RuntimeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             with patch("inf_hub.config.LOCAL_INF_FILE", Path(td) / ".inf"):
                 inf = Path(td) / ".inf"
-                inf.write_text("orgId: org-1\nprojectId: proj-1\nenvironment: dev\n")
-                self.assertEqual(effective_local_value("orgId"), "org-1")
+                inf.write_text("tokenId: token-main\nprojectId: proj-1\nenvironment: dev\n")
+                self.assertEqual(effective_local_value("tokenId"), "token-main")
 
 
 if __name__ == "__main__":
