@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "inf-hub"
-version = "0.1.0"
+version = "0.2.0"
 description = "Git-style CLI for versioned Infisical environment workflows"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -31,6 +31,7 @@ dependencies = ["argcomplete", "keyring", "keyring-pass", "PyYAML", "rich", "que
 [project.scripts]
 ih = "inf_hub.cli:main"
 ih-dc = "inf_hub.cli:main"
+ih-test = "inf_hub.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/Paperized/inf-hub"
