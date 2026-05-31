@@ -8,9 +8,9 @@ It is designed for project bootstrap + versioned env operations (`pull`, `push`,
 ## Why it is useful
 
 - keeps env workflow operational and repeatable
-- binds each folder to org/project/environment
-- supports multi-org by storing one token per org
-- maintains a saved list of configured orgs for validation and interactive selection
+- binds each folder to token/project/environment
+- supports multiple tokens, including many tokens bound to the same organization
+- maintains a saved token list for validation and interactive selection
 - works in interactive mode with API-backed selection menus
 
 ## Minimal setup
@@ -18,31 +18,25 @@ It is designed for project bootstrap + versioned env operations (`pull`, `push`,
 ```bash
 export INFISICAL_API_URL="https://your-infisical-host"
 
-# token is bound to orgId (also adds org to saved list)
-# validates token by default (JWT decode + API test call)
-# extracts org-name from JWT automatically
-ih init token --org-id "<org-uuid>" --token "<token>" --yes
-
-# skip validation if needed (e.g., API not reachable yet)
-ih init token --org-id "<org-uuid>" --token "<token>" --yes --skip-checks
-
-# provide org-name explicitly
-ih init token --org-id "<org-uuid>" --org-name "My Org" --token "<token>" --yes
+# token metadata is extracted from JWT; tokenId is user-defined and unique
+ih register token --token-id "my-token" --token "<token>" --yes
 
 # initialize folder context
-ih init folder --org-id "<org-uuid>" --project-id "<project-uuid>" --environment dev --yes
+ih init folder --token-id "my-token" --project-id "<project-uuid>" --environment dev --yes
 ```
 
 After this, commands read defaults from `.inf`.
 
-## Global vs local config
+## Local config model
 
-Only `orgId` and `environment` can be set globally via `ih set TYPE --value VALUE --global`.
-`projectId` and `identityId` are org-specific and can only be set locally (requires `.inf`).
+`ih set`/`ih unset` work only on local `.inf` context.
+Execution context precedence is: explicit CLI args > local `.inf` > interactive selection.
 
 ## Core commands
 
 ```bash
+ih register token
+ih unregister token
 ih pull
 ih pull -p
 ih push
@@ -50,19 +44,4 @@ ih push -f .env.prod
 ih push -k KEY -v VALUE -k KEY2 -v VALUE2
 ih history --name API_KEY
 ih rollback --name API_KEY --version 2 -f .env.rollback
-```
-
-## Headless Debian/Ubuntu note
-
-If keyring backend is `keyring-pass`, install and initialize `pass`:
-
-```bash
-sudo apt update
-sudo apt install -y pass gnupg2
-
-gpg --batch --passphrase '' --quick-generate-key "ih-test <ih-test@local>" default default 0
-KEY_ID=$(gpg --list-secret-keys --keyid-format LONG | awk '/^sec/{print $2}' | tail -n1 | cut -d'/' -f2)
-pass init "$KEY_ID"
-
-export PYTHON_KEYRING_BACKEND=keyring_pass.PasswordStoreBackend
 ```

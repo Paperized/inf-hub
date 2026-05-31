@@ -7,11 +7,9 @@ import yaml
 CONFIG_DIR = Path.home() / ".config" / "inf-hub"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 KEYRING_SERVICE = "inf-hub"
-KEYRING_USERNAME = "default-token"
 LOCAL_INF_FILE = Path(".inf")
 
-DEFAULT_TYPES = ("orgId", "identityId", "projectId", "environment")
-GLOBAL_TYPES = ("orgId", "environment")
+DEFAULT_TYPES = ("tokenId", "identityId", "projectId", "environment")
 
 
 def ensure_config_dir():
@@ -32,156 +30,97 @@ def save_config(config):
     CONFIG_FILE.chmod(0o600)
 
 
-def get_config_or_exit():
-    token = load_token_secure()
-    config = load_config()
-    legacy_token = (config or {}).get("token")
-    if not token and not legacy_token:
-        print("Error: not configured. Run 'ih init' first.")
-        raise SystemExit(1)
-    if not config:
-        config = {}
-    config["token"] = token or legacy_token
-    return config
+def _token_key_username(token_id: str) -> str:
+    return f"tokenId:{token_id}"
 
 
-def load_token_secure():
-    return keyring.get_password(KEYRING_SERVICE, KEYRING_USERNAME)
-
-
-def save_token_secure(token):
-    keyring.set_password(KEYRING_SERVICE, KEYRING_USERNAME, token)
-
-
-def _org_token_username(org_id):
-    return f"orgId:{org_id}"
-
-
-def load_token_for_org(org_id):
-    if not org_id:
+def load_token_for_token_id(token_id: str | None):
+    if not token_id:
         return None
-    return keyring.get_password(KEYRING_SERVICE, _org_token_username(org_id))
+    return keyring.get_password(KEYRING_SERVICE, _token_key_username(token_id))
 
 
-def save_token_for_org(org_id, token):
-    keyring.set_password(KEYRING_SERVICE, _org_token_username(org_id), token)
+def save_token_for_token_id(token_id: str, token: str):
+    keyring.set_password(KEYRING_SERVICE, _token_key_username(token_id), token)
 
 
-def delete_token_secure():
+def delete_token_for_token_id(token_id: str):
     try:
-        keyring.delete_password(KEYRING_SERVICE, KEYRING_USERNAME)
+        keyring.delete_password(KEYRING_SERVICE, _token_key_username(token_id))
     except keyring.errors.PasswordDeleteError:
         pass
 
 
-def get_token_or_exit():
-    token = load_token_secure()
+def get_token_for_token_id_or_exit(token_id: str):
+    token = load_token_for_token_id(token_id)
     if token:
         return token
-
-    config = load_config() or {}
-    legacy_token = config.get("token")
-    if legacy_token:
-        return legacy_token
-
-    print("Error: not configured. Run 'ih init' first.")
+    print(f"Error: missing token for tokenId '{token_id}'. Run 'ih register token --token-id {token_id}'.")
     raise SystemExit(1)
 
 
-def get_token_for_org_or_exit(org_id):
-    token = load_token_for_org(org_id)
-    if token:
-        return token
-    print(f"Error: missing token for org '{org_id}'. Run 'ih init token --org-id {org_id}'.")
-    raise SystemExit(1)
-
-
-def get_default(key):
+def load_tokens():
     config = load_config()
-    if not config:
-        return None
-    entry = config.get("defaults", {}).get(key)
-    if entry is None:
-        return None
-    if isinstance(entry, dict):
-        return entry.get("value")
-    return entry
-
-
-def get_global(key):
-    return get_default(key)
-
-
-def set_default(key, value):
-    config = load_config() or {}
-    if "defaults" not in config:
-        config["defaults"] = {}
-    config["defaults"][key] = {"value": value}
-    save_config(config)
-
-
-def set_global(key, value):
-    set_default(key, value)
-
-
-def remove_default(key):
-    config = load_config()
-    if not config or "defaults" not in config:
-        return
-    config["defaults"].pop(key, None)
-    save_config(config)
-
-
-def remove_global(key):
-    remove_default(key)
-
-
-def load_orgs():
-    config = load_config()
-    raw = (config or {}).get("orgs", [])
-    orgs = []
+    raw = (config or {}).get("tokens", [])
+    tokens = []
     for entry in raw:
-        if isinstance(entry, str):
-            orgs.append({"id": entry, "name": entry})
-        elif isinstance(entry, dict):
-            orgs.append({"id": entry.get("id", ""), "name": entry.get("name", entry.get("id", ""))})
-    return orgs
+        if isinstance(entry, dict):
+            tid = entry.get("tokenId", "")
+            if not tid:
+                continue
+            tokens.append(
+                {
+                    "tokenId": tid,
+                    "orgId": entry.get("orgId", ""),
+                }
+            )
+    return tokens
 
 
-def get_org_ids():
-    return [o["id"] for o in load_orgs()]
+def get_token_ids():
+    return [t["tokenId"] for t in load_tokens()]
 
 
-def save_org(org_id, org_name=None):
+def get_token_entry(token_id: str):
+    for entry in load_tokens():
+        if entry["tokenId"] == token_id:
+            return entry
+    return None
+
+
+def save_token_entry(token_id: str, org_id: str):
     config = load_config() or {}
-    orgs = config.get("orgs", [])
+    tokens = config.get("tokens", [])
     normalized = []
     found = False
-    for entry in orgs:
-        if isinstance(entry, str):
-            if entry == org_id:
-                normalized.append({"id": org_id, "name": org_name or org_id})
-                found = True
-            else:
-                normalized.append({"id": entry, "name": entry})
-        elif isinstance(entry, dict):
-            if entry.get("id") == org_id:
-                normalized.append({"id": org_id, "name": org_name or entry.get("name", org_id)})
-                found = True
-            else:
-                normalized.append(entry)
+    for entry in tokens:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("tokenId") == token_id:
+            normalized.append({"tokenId": token_id, "orgId": org_id})
+            found = True
+        else:
+            normalized.append(entry)
     if not found:
-        normalized.append({"id": org_id, "name": org_name or org_id})
-    config["orgs"] = normalized
+        normalized.append({"tokenId": token_id, "orgId": org_id})
+    config["tokens"] = normalized
     save_config(config)
 
 
-def get_orgs_or_exit():
-    orgs = load_orgs()
-    if not orgs:
-        print("Error: no organizations configured. Run 'ih init token' first.")
+def remove_token_entry(token_id: str):
+    config = load_config() or {}
+    tokens = config.get("tokens", [])
+    filtered = [t for t in tokens if isinstance(t, dict) and t.get("tokenId") != token_id]
+    config["tokens"] = filtered
+    save_config(config)
+
+
+def get_tokens_or_exit():
+    tokens = load_tokens()
+    if not tokens:
+        print("Error: no tokens configured. Run 'ih register token' first.")
         raise SystemExit(1)
-    return orgs
+    return tokens
 
 
 def load_local_inf():
@@ -192,13 +131,13 @@ def load_local_inf():
     if data is None:
         return {}
     if not isinstance(data, dict):
-        raise ValueError("Invalid .inf format: expected a YAML object with keys orgId/projectId/environment.")
+        raise ValueError("Invalid .inf format: expected a YAML object with keys tokenId/projectId/environment.")
     return data
 
 
-def save_local_inf(org_id, project_id, environment):
+def save_local_inf(token_id, project_id, environment):
     payload = {
-        "orgId": org_id,
+        "tokenId": token_id,
         "projectId": project_id,
         "environment": environment,
     }
