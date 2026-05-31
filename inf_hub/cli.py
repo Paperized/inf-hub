@@ -1,0 +1,892 @@
+# PYTHON_ARGCOMPLETE_OK
+import argparse
+import base64
+import getpass
+import json
+import os
+import sys
+from pathlib import Path
+
+import argcomplete
+try:
+    import questionary
+    HAS_QUESTIONARY = True
+except Exception:
+    HAS_QUESTIONARY = False
+
+from inf_hub.api import InfisicalAPI
+from inf_hub.config import (
+    CONFIG_FILE,
+    DEFAULT_TYPES,
+    get_global,
+    get_token_for_org_or_exit,
+    load_config,
+    load_local_inf,
+    load_token_for_org,
+    remove_global,
+    remove_local_value,
+    save_config,
+    save_local_inf,
+    save_token_secure,
+    save_token_for_org,
+    set_global,
+    set_local_value,
+)
+
+VALID_ROLES = ("admin", "member", "viewer", "no-access")
+
+
+def _print(msg):
+    print(msg)
+
+
+def _print_org_line(org_id, org_name, projects_count):
+    if HAS_QUESTIONARY:
+        # questionary does not control plain command output styling.
+        pass
+    try:
+        from rich.console import Console
+        console = Console()
+        if org_name == "Token Org":
+            console.print(
+                f"[bold cyan]{org_id}[/bold cyan] | [bold magenta]{org_name}[/bold magenta] | projects={projects_count}"
+            )
+            return
+        console.print(f"{org_id} | {org_name} | projects={projects_count}")
+        return
+    except Exception:
+        pass
+    _print(f"{org_id} | {org_name} | projects={projects_count}")
+
+
+def _parse_id(value):
+    if not value:
+        return None
+    return value.split("|")[0].strip()
+
+
+def _get_api_for_org_silent(org_id):
+    try:
+        base_url = os.environ.get("INFISICAL_API_URL")
+        if not base_url or not org_id:
+            return None
+        token = load_token_for_org(org_id)
+        if not token:
+            return None
+        return InfisicalAPI(base_url, token)
+    except Exception:
+        return None
+
+
+def _extract_org_id_from_token(token):
+    if not token:
+        return None
+    try:
+        parts = token.split(".")
+        if len(parts) != 3:
+            return None
+        payload = parts[1]
+        payload += "=" * (-len(payload) % 4)
+        data = json.loads(base64.urlsafe_b64decode(payload.encode()).decode())
+        return data.get("organizationId")
+    except Exception:
+        return None
+
+
+def _get_org_entries(api):
+    """Return org entries enriched with token org fallback when needed."""
+    entries = []
+    try:
+        entries = api.list_organizations().get("organizations", [])
+    except Exception:
+        entries = []
+
+    token_org_id = _resolve_org_id(argparse.Namespace(), allow_prompt=False, api=None)
+    token = load_token_for_org(token_org_id) if token_org_id else None
+    token_org_id = _extract_org_id_from_token(token)
+    if token_org_id and not any(o.get("id") == token_org_id for o in entries):
+        entries.append(
+            {
+                "id": token_org_id,
+                "name": "Token Org",
+                "projects": [],
+            }
+        )
+    return entries
+
+
+def _resolve_org_id(args, allow_prompt=False, api=None):
+    explicit = _parse_id(getattr(args, "org_id", None)) if hasattr(args, "org_id") else None
+    org_id = explicit or _effective_value("orgId")
+    if not org_id and allow_prompt:
+        org_id = (_interactive_org_id(api) if api else None) or _parse_id(_prompt("Organization ID"))
+    return org_id
+
+
+def _api_for_org_or_exit(org_id):
+    base_url = os.environ.get("INFISICAL_API_URL")
+    if not base_url:
+        _print("Error: INFISICAL_API_URL is not set.")
+        _print("Set it with:")
+        _print("  export INFISICAL_API_URL=https://app.infisical.com")
+        raise SystemExit(1)
+    token = get_token_for_org_or_exit(org_id)
+    return InfisicalAPI(base_url, token)
+
+
+def _load_local_inf_or_exit():
+    try:
+        return load_local_inf()
+    except ValueError as e:
+        _print(f"Error: {e}")
+        raise SystemExit(1)
+
+
+def _effective_value(key, explicit=None):
+    if explicit:
+        return explicit
+    local_inf = _load_local_inf_or_exit()
+    if local_inf is not None and local_inf.get(key):
+        return local_inf.get(key)
+    return get_global(key)
+
+
+def _warn_local_override(local_key, explicit):
+    local_inf = _load_local_inf_or_exit()
+    if explicit and local_inf is not None:
+        _print(f"Warning: overriding local .inf value for {local_key}.")
+
+
+def _select(message, choices):
+    if HAS_QUESTIONARY:
+        return questionary.select(message, choices=choices).ask()
+    return None
+
+
+def _prompt(label, secret=False, default=None):
+    if HAS_QUESTIONARY:
+        if secret:
+            v = questionary.password(label).ask()
+            return (v or "").strip()
+        v = questionary.text(label, default=default or "").ask()
+        return (v or "").strip() or default
+    suffix = f" [{default}]" if default else ""
+    if secret:
+        v = getpass.getpass(f"{label}{suffix}: ")
+    else:
+        v = input(f"{label}{suffix}: ")
+    return v.strip() if v.strip() else default
+
+
+def _confirm(message):
+    if HAS_QUESTIONARY:
+        return bool(questionary.confirm(message, default=False).ask())
+    return input(f"{message} [y/N]: ").lower() in ("y", "yes")
+
+
+def _interactive_org_id(api):
+    try:
+        orgs = _get_org_entries(api)
+    except Exception:
+        return None
+    if not orgs:
+        return None
+    return _parse_id(_select("Select organization", [f"{o['id']} | {o.get('name', o['id'])}" for o in orgs]))
+
+
+def _interactive_project_id(api):
+    try:
+        projects = api.list_projects().get("projects", [])
+    except Exception:
+        return None
+    if not projects:
+        return None
+    return _parse_id(_select("Select project", [f"{p['id']} | {p['name']}" for p in projects]))
+
+
+def _interactive_environment(api, project_id):
+    if not project_id:
+        return None
+    try:
+        projects = api.list_projects().get("projects", [])
+    except Exception:
+        return None
+    for p in projects:
+        if p["id"] == project_id:
+            envs = p.get("environments", [])
+            if not envs:
+                return None
+            return _parse_id(_select("Select environment", [f"{e['slug']} | {e['name']}" for e in envs]))
+    return None
+
+
+def _interactive_identity_id(api, org_id):
+    if not org_id:
+        return None
+    try:
+        identities = api.list_identities(org_id).get("identities", [])
+    except Exception:
+        return None
+    if not identities:
+        return None
+    choices = [f"{i.get('identityId', i.get('id'))} | {i.get('identity', {}).get('name', 'unknown')}" for i in identities]
+    return _parse_id(_select("Select machine identity", choices))
+
+
+def _complete_org_ids(prefix, **kwargs):
+    try:
+        org_id = _effective_value("orgId")
+        api = _get_api_for_org_silent(org_id)
+        if not api:
+            token = load_token_for_org(org_id) if org_id else None
+            token_org_id = _extract_org_id_from_token(token)
+            if token_org_id:
+                return [f"{token_org_id} | Token Org"]
+            return []
+        return [f"{o['id']} | {o.get('name', o['id'])}" for o in _get_org_entries(api)]
+    except Exception:
+        return []
+
+
+def _complete_project_ids(prefix, **kwargs):
+    org_id = _effective_value("orgId")
+    api = _get_api_for_org_silent(org_id)
+    if not api:
+        return []
+    try:
+        return [f"{p['id']} | {p['name']}" for p in api.list_projects().get("projects", [])]
+    except Exception:
+        return []
+
+
+def _complete_environments(prefix, parsed_args=None, **kwargs):
+    org_id = _parse_id(getattr(parsed_args, "org_id", None)) if parsed_args is not None else None
+    org_id = org_id or _effective_value("orgId")
+    api = _get_api_for_org_silent(org_id)
+    if not api:
+        return []
+    try:
+        project_id = None
+        if parsed_args is not None:
+            project_id = _parse_id(getattr(parsed_args, "project_id", None))
+        project_id = project_id or _effective_value("projectId")
+        if not project_id:
+            return []
+        projects = api.list_projects().get("projects", [])
+        for p in projects:
+            if p["id"] == project_id:
+                return [e["slug"] for e in p.get("environments", [])]
+        return []
+    except Exception:
+        return []
+
+
+def _complete_identity_ids(prefix, **kwargs):
+    org_id = _effective_value("orgId")
+    api = _get_api_for_org_silent(org_id)
+    if not api:
+        return []
+    try:
+        org_id = _effective_value("orgId")
+        if not org_id:
+            return []
+        identities = api.list_identities(org_id).get("identities", [])
+        return [f"{i['identityId']} | {i['identity']['name']}" for i in identities]
+    except Exception:
+        return []
+
+
+def _complete_secret_names(prefix, parsed_args, **kwargs):
+    org_id = _parse_id(getattr(parsed_args, "org_id", None)) or _effective_value("orgId")
+    api = _get_api_for_org_silent(org_id)
+    if not api:
+        return []
+    try:
+        project_id = _parse_id(getattr(parsed_args, "project_id", None)) or _effective_value("projectId")
+        environment = getattr(parsed_args, "environment", None) or _effective_value("environment") or "dev"
+        if not project_id:
+            return []
+        return [s.get("secretKey", "") for s in api.list_secrets(project_id, environment).get("secrets", []) if s.get("secretKey")]
+    except Exception:
+        return []
+
+
+def _complete_set_value(prefix, parsed_args, **kwargs):
+    t = getattr(parsed_args, "type", None)
+    if t == "orgId":
+        return _complete_org_ids(prefix)
+    if t == "projectId":
+        return _complete_project_ids(prefix)
+    if t == "identityId":
+        return _complete_identity_ids(prefix)
+    if t == "environment":
+        return _complete_environments(prefix, parsed_args)
+    return []
+
+
+def _parse_env_file(path):
+    updates = []
+    with open(path) as f:
+        for i, raw in enumerate(f, 1):
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("export "):
+                line = line[7:].strip()
+            if "=" not in line:
+                raise ValueError(f"Invalid .env format at line {i}: expected KEY=VALUE")
+            k, v = line.split("=", 1)
+            k = k.strip()
+            if not k:
+                raise ValueError(f"Invalid .env format at line {i}: empty key")
+            updates.append((k, v))
+    return updates
+
+
+def _write_env_file(path, secrets):
+    with open(path, "w") as f:
+        for s in secrets:
+            f.write(f"{s['secretKey']}={s.get('secretValue','')}\n")
+
+
+def cmd_init_token(args):
+    _print("Configure ih")
+    if not os.environ.get("INFISICAL_API_URL"):
+        _print("Warning: INFISICAL_API_URL is not set.")
+        _print("Set it with:")
+        _print("  export INFISICAL_API_URL=https://app.infisical.com")
+
+    org_id = _parse_id(args.org_id) if args.org_id else None
+    token = args.token
+    if not args.yes and not token:
+        token = _prompt("Infisical token", secret=True)
+    if not args.yes and not org_id:
+        org_id = _parse_id(_prompt("Organization ID"))
+    if args.yes and not token:
+        _print("Error: --token is required with --yes")
+        raise SystemExit(1)
+    if args.yes and not org_id:
+        _print("Error: --org-id is required with --yes")
+        raise SystemExit(1)
+    if not token:
+        _print("Error: token is required.")
+        raise SystemExit(1)
+    if not org_id:
+        _print("Error: organization ID is required.")
+        raise SystemExit(1)
+
+    save_token_for_org(org_id, token)
+    cfg = load_config() or {}
+    cfg.pop("token", None)
+    save_config(cfg)
+    _print(f"Token saved to secure keyring for org {org_id}. Global config: {CONFIG_FILE}")
+
+
+def cmd_init_folder(args):
+    org_id = _resolve_org_id(args, allow_prompt=False, api=None)
+    api = _get_api_for_org_silent(org_id)
+    org_id = _parse_id(args.org_id) if args.org_id else None
+    project_id = _parse_id(args.project_id) if args.project_id else None
+    environment = args.environment or "dev"
+
+    if not args.yes:
+        if not org_id:
+            org_id = (_interactive_org_id(api) if api else None) or _parse_id(_prompt("Organization ID"))
+        if not project_id:
+            project_id = (_interactive_project_id(api) if api else None) or _parse_id(_prompt("Project ID"))
+        if not args.environment:
+            environment = (_interactive_environment(api, project_id) if api else None) or _prompt("Environment", default="dev")
+    else:
+        if not org_id or not project_id:
+            _print("Error: --org-id and --project-id are required with --yes")
+            raise SystemExit(1)
+
+    if not org_id or not project_id:
+        _print("Error: orgId and projectId are required.")
+        raise SystemExit(1)
+
+    if not args.yes and not _confirm("Proceed with local repository initialization?"):
+        _print("Aborted.")
+        return
+
+    save_local_inf(org_id, project_id, environment)
+    _print(f"Initialized local repository context in .inf (Env: {environment}).")
+
+
+def cmd_create_project(args):
+    _warn_local_override("orgId", args.org_id)
+    name = args.name
+    slug = args.slug
+    org_id = _resolve_org_id(args, allow_prompt=not args.yes, api=_get_api_for_org_silent(_resolve_org_id(args, False, None)))
+    if not org_id:
+        _print("Error: orgId is required.")
+        raise SystemExit(1)
+    api = _api_for_org_or_exit(org_id)
+    identity_id = _parse_id(args.identity_id) or _effective_value("identityId")
+    role = args.role
+
+    if not args.yes:
+        if not name:
+            name = _prompt("Project name")
+        if not slug:
+            slug = _prompt("Slug", default=name)
+        if _confirm("Add machine identity?"):
+            if not identity_id:
+                identity_id = _interactive_identity_id(api, org_id) or _parse_id(_prompt("Machine identity ID"))
+            if not role:
+                role = _prompt(f"Role ({', '.join(VALID_ROLES)})", default="member")
+        else:
+            identity_id = None
+    else:
+        if not name:
+            _print("Error: --name is required with --yes")
+            raise SystemExit(1)
+        if not slug:
+            slug = name
+        if not org_id:
+            _print("Error: --org-id is required with --yes")
+            raise SystemExit(1)
+        if identity_id and not role:
+            role = "member"
+
+    if role and role not in VALID_ROLES:
+        _print(f"Error: invalid role '{role}'. Must be one of: {', '.join(VALID_ROLES)}")
+        raise SystemExit(1)
+
+    if not args.yes and not _confirm("Proceed?"):
+        _print("Aborted.")
+        return
+
+    project = api.create_project(name, org_id, slug)["project"]
+    _print(f"Created project '{project['name']}' (ID: {project['id']}).")
+    if identity_id:
+        api.add_identity_to_project(project["id"], identity_id, role)
+        _print(f"Added identity {identity_id} with role {role}.")
+
+
+def cmd_list_orgs(args):
+    org_id = _resolve_org_id(args, allow_prompt=False, api=None)
+    api = _get_api_for_org_silent(org_id)
+    if not api:
+        org_id = _resolve_org_id(args)
+        if not org_id:
+            _print("No organizations found.")
+            return
+        _print_org_line(org_id, "Token Org", 0)
+        return
+    orgs = _get_org_entries(api)
+    if not orgs:
+        _print("No organizations found.")
+        return
+    for o in orgs:
+        _print_org_line(o["id"], o.get("name", o["id"]), len(o.get("projects", [])))
+
+
+def cmd_list_projects(args):
+    org_id = _resolve_org_id(args, allow_prompt=not getattr(args, "yes", False), api=_get_api_for_org_silent(_resolve_org_id(args, False, None)))
+    if not org_id:
+        _print("Error: orgId is required.")
+        raise SystemExit(1)
+    api = _api_for_org_or_exit(org_id)
+    projects = api.list_projects().get("projects", [])
+    if not projects:
+        _print("No projects found.")
+        return
+    for p in projects:
+        _print(f"{p['id']} | {p['name']} | {p['slug']}")
+
+
+def cmd_list_identities(args):
+    _warn_local_override("orgId", args.org_id)
+    org_id = _resolve_org_id(args, allow_prompt=not getattr(args, "yes", False), api=_get_api_for_org_silent(_resolve_org_id(args, False, None)))
+    if not org_id:
+        _print("Error: orgId is required.")
+        raise SystemExit(1)
+    api = _api_for_org_or_exit(org_id)
+    identities = api.list_identities(org_id).get("identities", [])
+    if not identities:
+        _print("No identities found.")
+        return
+    for i in identities:
+        _print(f"{i.get('identityId', i.get('id'))} | {i.get('identity', {}).get('name', 'unknown')} | {i.get('role','')}")
+
+
+def cmd_set(args):
+    dtype = args.type
+    value = args.value
+    if dtype not in DEFAULT_TYPES:
+        _print(f"Error: invalid type '{dtype}'. Must be one of: {', '.join(DEFAULT_TYPES)}")
+        raise SystemExit(1)
+    if not value:
+        _print("Error: --value is required.")
+        raise SystemExit(1)
+    if dtype in ("orgId", "identityId", "projectId"):
+        value = _parse_id(value)
+
+    if args.global_scope:
+        set_global(dtype, value)
+        _print(f"Global {dtype} set to: {value}")
+    else:
+        set_local_value(dtype, value)
+        _print(f"Local {dtype} set to: {value}")
+
+
+def cmd_unset(args):
+    dtype = args.type
+    if dtype not in DEFAULT_TYPES:
+        _print(f"Error: invalid type '{dtype}'. Must be one of: {', '.join(DEFAULT_TYPES)}")
+        raise SystemExit(1)
+    if args.global_scope:
+        remove_global(dtype)
+        _print(f"Global {dtype} removed.")
+    else:
+        remove_local_value(dtype)
+        _print(f"Local {dtype} removed.")
+
+
+def _resolve_target(api, args):
+    _warn_local_override("projectId", getattr(args, "project_id", None))
+    project_id = _parse_id(getattr(args, "project_id", None)) or _effective_value("projectId")
+    environment = getattr(args, "environment", None) or _effective_value("environment") or "dev"
+    if not project_id:
+        if not getattr(args, "yes", False):
+            project_id = _interactive_project_id(api) or _parse_id(_prompt("Project ID"))
+        else:
+            _print("Error: --project-id is required with --yes")
+            raise SystemExit(1)
+    if not getattr(args, "environment", None) and not _effective_value("environment") and not getattr(args, "yes", False):
+        environment = _interactive_environment(api, project_id) or environment
+    return project_id, environment
+
+
+def cmd_pull(args):
+    org_id = _resolve_org_id(args, allow_prompt=not args.yes, api=_get_api_for_org_silent(_resolve_org_id(args, False, None)))
+    if not org_id:
+        _print("Error: orgId is required.")
+        raise SystemExit(1)
+    api = _api_for_org_or_exit(org_id)
+    project_id, environment = _resolve_target(api, args)
+    secrets = api.list_secrets(project_id, environment).get("secrets", [])
+    if args.p:
+        for s in secrets:
+            _print(f"{s['secretKey']}={s.get('secretValue','')}")
+        _print(f"Pulled secrets from Env: {environment} (printed to stdout).")
+        return
+    path = args.file or ".env"
+    _write_env_file(path, secrets)
+    _print(f"Pulled secrets from Env: {environment} to file: {path}.")
+
+
+def _pair_updates(keys, values):
+    if len(keys) != len(values):
+        _print("Error: -k and -v must be provided in pairs.")
+        raise SystemExit(1)
+    return list(zip(keys, values))
+
+
+def cmd_push(args):
+    org_id = _resolve_org_id(args, allow_prompt=not args.yes, api=_get_api_for_org_silent(_resolve_org_id(args, False, None)))
+    if not org_id:
+        _print("Error: orgId is required.")
+        raise SystemExit(1)
+    api = _api_for_org_or_exit(org_id)
+    project_id, environment = _resolve_target(api, args)
+
+    has_file = bool(args.file)
+    has_inline = bool(args.k or args.v)
+    if has_file and has_inline:
+        _print("Error: use either -f or -k/-v, not both.")
+        raise SystemExit(1)
+
+    if has_inline:
+        updates = _pair_updates(args.k or [], args.v or [])
+        source_desc = "inline key/value input"
+    else:
+        path = args.file or ".env"
+        try:
+            updates = _parse_env_file(path)
+        except FileNotFoundError:
+            _print(f"Error: file not found '{path}'")
+            raise SystemExit(1)
+        except ValueError as e:
+            _print(f"Error: {e}")
+            raise SystemExit(1)
+        source_desc = f"file: {path}"
+
+    if not updates:
+        _print("Error: no values to push.")
+        raise SystemExit(1)
+
+    current = {s.get("secretKey"): s.get("secretValue", "") for s in api.list_secrets(project_id, environment).get("secrets", [])}
+    if not args.yes:
+        for k, nv in updates:
+            ov = current.get(k)
+            _print(f"{k}: {('<MISSING>' if ov is None else ov)} -> {nv}")
+        if not _confirm("Proceed?"):
+            _print("Aborted.")
+            return
+
+    for k, v in updates:
+        try:
+            api.update_secret(project_id, environment, k, v)
+        except RuntimeError as e:
+            if "404" in str(e):
+                api.create_secret(project_id, environment, k, v)
+            else:
+                raise
+
+    _print(f"Pushed {len(updates)} secrets to Env: {environment} from {source_desc}.")
+
+
+def cmd_history(args):
+    org_id = _resolve_org_id(args, allow_prompt=not args.yes, api=_get_api_for_org_silent(_resolve_org_id(args, False, None)))
+    if not org_id:
+        _print("Error: orgId is required.")
+        raise SystemExit(1)
+    api = _api_for_org_or_exit(org_id)
+    project_id, environment = _resolve_target(api, args)
+    secret_name = args.name
+    if not secret_name:
+        if args.yes:
+            _print("Error: --name is required with --yes")
+            raise SystemExit(1)
+        secret_name = _prompt("Secret name")
+
+    result = api.get_secret(project_id, environment, secret_name)
+    current_version = result.get("secret", {}).get("version", 1)
+    _print(f"Env: {environment}")
+    _print(f"History for '{secret_name}' (current version: {current_version})")
+    for v in range(current_version, 0, -1):
+        try:
+            s = api.get_secret(project_id, environment, secret_name, version=v).get("secret", {})
+            _print(f"v{v} | updatedAt={s.get('updatedAt','')} | value={s.get('secretValue','')}")
+        except Exception:
+            _print(f"v{v} | not available")
+
+
+def cmd_rollback(args):
+    org_id = _resolve_org_id(args, allow_prompt=not args.yes, api=_get_api_for_org_silent(_resolve_org_id(args, False, None)))
+    if not org_id:
+        _print("Error: orgId is required.")
+        raise SystemExit(1)
+    api = _api_for_org_or_exit(org_id)
+    project_id, environment = _resolve_target(api, args)
+    secret_name = args.name
+    version = args.version
+    out_file = args.file or ".env"
+
+    if not secret_name:
+        if args.yes:
+            _print("Error: --name is required with --yes")
+            raise SystemExit(1)
+        secret_name = _prompt("Secret name")
+    if not version:
+        if args.yes:
+            _print("Error: --version is required with --yes")
+            raise SystemExit(1)
+        version = _prompt("Version to rollback to")
+
+    try:
+        version = int(version)
+    except ValueError:
+        _print(f"Error: invalid version '{version}'")
+        raise SystemExit(1)
+
+    old = api.get_secret(project_id, environment, secret_name, version=version).get("secret", {})
+    old_value = old.get("secretValue", "")
+
+    if not args.yes and not _confirm(f"Rollback '{secret_name}' to version {version}?"):
+        _print("Aborted.")
+        return
+
+    api.update_secret(project_id, environment, secret_name, old_value)
+
+    secrets = api.list_secrets(project_id, environment).get("secrets", [])
+    _write_env_file(out_file, secrets)
+
+    _print(f"Rolled back secret '{secret_name}' to version {version} in Env: {environment}; synced local file: {out_file}.")
+
+
+def main():
+    parser = argparse.ArgumentParser(prog="ih", description="inf-hub CLI")
+    sub = parser.add_subparsers(dest="command")
+
+    p_init = sub.add_parser("init", help="Initialize ih")
+    init_sub = p_init.add_subparsers(dest="init_command")
+
+    p_init_token = init_sub.add_parser("token", help="Configure API token")
+    p_init_token.add_argument("--token", help="Infisical API token")
+    a = p_init_token.add_argument("--org-id", help="Organization ID bound to this token")
+    a.completer = _complete_org_ids
+    p_init_token.add_argument("--yes", "-y", action="store_true", help="Non-interactive")
+
+    p_init_folder = init_sub.add_parser("folder", help="Initialize local .inf context")
+    a = p_init_folder.add_argument("--org-id", help="Organization ID")
+    a.completer = _complete_org_ids
+    a = p_init_folder.add_argument("--project-id", help="Project ID")
+    a.completer = _complete_project_ids
+    a = p_init_folder.add_argument("--environment", "-e", help="Environment slug (default: dev)")
+    a.completer = _complete_environments
+    p_init_folder.add_argument("--yes", "-y", action="store_true", help="Non-interactive")
+
+    p_create = sub.add_parser("create", help="Create resources")
+    create_sub = p_create.add_subparsers(dest="create_object")
+    p_create_project = create_sub.add_parser("project", help="Create project")
+    p_create_project.add_argument("--name", help="Project name")
+    p_create_project.add_argument("--slug", help="Project slug")
+    a = p_create_project.add_argument("--org-id", help="Organization ID")
+    a.completer = _complete_org_ids
+    a = p_create_project.add_argument("--identity-id", help="Machine identity ID")
+    a.completer = _complete_identity_ids
+    p_create_project.add_argument("--role", choices=VALID_ROLES, help="Identity role")
+    p_create_project.add_argument("--yes", "-y", action="store_true", help="Non-interactive")
+
+    p_list = sub.add_parser("list", help="List resources")
+    list_sub = p_list.add_subparsers(dest="list_object")
+    p_lo = list_sub.add_parser("orgs", help="List organizations")
+    a = p_lo.add_argument("--org-id", help="Organization ID")
+    a.completer = _complete_org_ids
+    p_lo.add_argument("--yes", "-y", action="store_true", help="Non-interactive")
+
+    p_lp = list_sub.add_parser("projects", help="List projects")
+    a = p_lp.add_argument("--org-id", help="Organization ID")
+    a.completer = _complete_org_ids
+    p_lp.add_argument("--yes", "-y", action="store_true", help="Non-interactive")
+
+    p_li = list_sub.add_parser("identities", help="List identities")
+    a = p_li.add_argument("--org-id", help="Organization ID")
+    a.completer = _complete_org_ids
+    p_li.add_argument("--yes", "-y", action="store_true", help="Non-interactive")
+
+    p_set = sub.add_parser("set", help="Set context value")
+    p_set.add_argument("type", choices=DEFAULT_TYPES, help="Value type")
+    a = p_set.add_argument("--value", required=True, help="Value")
+    a.completer = _complete_set_value
+    p_set.add_argument("--global", dest="global_scope", action="store_true", help="Set global value")
+
+    p_unset = sub.add_parser("unset", help="Unset context value")
+    p_unset.add_argument("type", choices=DEFAULT_TYPES, help="Value type")
+    p_unset.add_argument("--global", dest="global_scope", action="store_true", help="Unset global value")
+
+    p_pull = sub.add_parser("pull", help="Pull env from remote")
+    a = p_pull.add_argument("--org-id", help="Organization ID")
+    a.completer = _complete_org_ids
+    a = p_pull.add_argument("--project-id", help="Project ID")
+    a.completer = _complete_project_ids
+    a = p_pull.add_argument("--environment", "-e", help="Environment")
+    a.completer = _complete_environments
+    p_pull.add_argument("-f", "--file", help="Output file path")
+    p_pull.add_argument("-p", action="store_true", help="Print to stdout")
+    p_pull.add_argument("--yes", "-y", action="store_true", help="Non-interactive")
+
+    p_push = sub.add_parser("push", help="Push env to remote")
+    a = p_push.add_argument("--org-id", help="Organization ID")
+    a.completer = _complete_org_ids
+    a = p_push.add_argument("--project-id", help="Project ID")
+    a.completer = _complete_project_ids
+    a = p_push.add_argument("--environment", "-e", help="Environment")
+    a.completer = _complete_environments
+    p_push.add_argument("-f", "--file", help="Input file path")
+    p_push.add_argument("-k", action="append", help="Secret key (repeatable)")
+    p_push.add_argument("-v", action="append", help="Secret value (repeatable)")
+    p_push.add_argument("--yes", "-y", action="store_true", help="Non-interactive")
+
+    p_hist = sub.add_parser("history", help="Show secret history")
+    a = p_hist.add_argument("--org-id", help="Organization ID")
+    a.completer = _complete_org_ids
+    a = p_hist.add_argument("--project-id", help="Project ID")
+    a.completer = _complete_project_ids
+    a = p_hist.add_argument("--environment", "-e", help="Environment")
+    a.completer = _complete_environments
+    a = p_hist.add_argument("--name", help="Secret name")
+    a.completer = _complete_secret_names
+    p_hist.add_argument("--yes", "-y", action="store_true", help="Non-interactive")
+
+    p_rb = sub.add_parser("rollback", help="Rollback secret and sync local file")
+    a = p_rb.add_argument("--org-id", help="Organization ID")
+    a.completer = _complete_org_ids
+    a = p_rb.add_argument("--project-id", help="Project ID")
+    a.completer = _complete_project_ids
+    a = p_rb.add_argument("--environment", "-e", help="Environment")
+    a.completer = _complete_environments
+    a = p_rb.add_argument("--name", help="Secret name")
+    a.completer = _complete_secret_names
+    p_rb.add_argument("--version", help="Version to rollback to")
+    p_rb.add_argument("-f", "--file", help="Local file to sync (default: .env)")
+    p_rb.add_argument("--yes", "-y", action="store_true", help="Non-interactive")
+
+    argcomplete.autocomplete(parser)
+    args = parser.parse_args()
+    if not args.command:
+        parser.print_help()
+        sys.exit(1)
+
+    try:
+        if args.command == "init":
+            if getattr(args, "init_command", None) == "folder":
+                cmd_init_folder(args)
+            else:
+                cmd_init_token(args)
+            return
+        if args.command == "create":
+            if args.create_object != "project":
+                _print("Error: missing create object. Use: ih create project")
+                raise SystemExit(1)
+            cmd_create_project(args)
+            return
+        if args.command == "list":
+            if args.list_object == "orgs":
+                cmd_list_orgs(args)
+            elif args.list_object == "projects":
+                cmd_list_projects(args)
+            elif args.list_object == "identities":
+                cmd_list_identities(args)
+            else:
+                _print("Error: missing list object. Use: ih list orgs|projects|identities")
+                raise SystemExit(1)
+            return
+        if args.command == "set":
+            cmd_set(args)
+            return
+        if args.command == "unset":
+            cmd_unset(args)
+            return
+        if args.command == "pull":
+            if args.p and args.file:
+                _print("Error: use either -p or -f, not both.")
+                raise SystemExit(1)
+            cmd_pull(args)
+            return
+        if args.command == "push":
+            cmd_push(args)
+            return
+        if args.command == "history":
+            cmd_history(args)
+            return
+        if args.command == "rollback":
+            cmd_rollback(args)
+            return
+    except KeyboardInterrupt:
+        _print("\nOperation cancelled.")
+        sys.exit(130)
+    except SystemExit:
+        raise
+    except Exception as e:
+        msg = str(e)
+        if "API error" in msg:
+            _print(f"Error: {msg}")
+        elif "not configured" in msg.lower():
+            _print(f"Error: {msg}")
+            _print("Run 'ih init' to configure.")
+        elif "unauthorized" in msg.lower() or "401" in msg:
+            _print("Error: Unauthorized. Check your API token.")
+            _print("Run 'ih init token --token YOUR_TOKEN' to update.")
+        elif "forbidden" in msg.lower() or "403" in msg:
+            _print("Error: Forbidden. You don't have permission for this operation.")
+        else:
+            _print(f"Error: {msg}")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

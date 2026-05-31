@@ -4,9 +4,9 @@ from pathlib import Path
 import keyring
 import yaml
 
-CONFIG_DIR = Path.home() / ".config" / "infisical-utils"
+CONFIG_DIR = Path.home() / ".config" / "inf-hub"
 CONFIG_FILE = CONFIG_DIR / "config.json"
-KEYRING_SERVICE = "infisical-utils"
+KEYRING_SERVICE = "inf-hub"
 KEYRING_USERNAME = "default-token"
 LOCAL_INF_FILE = Path(".inf")
 
@@ -36,7 +36,7 @@ def get_config_or_exit():
     config = load_config()
     legacy_token = (config or {}).get("token")
     if not token and not legacy_token:
-        print("Error: not configured. Run 'infisical-utils init' first.")
+        print("Error: not configured. Run 'ih init' first.")
         raise SystemExit(1)
     if not config:
         config = {}
@@ -50,6 +50,20 @@ def load_token_secure():
 
 def save_token_secure(token):
     keyring.set_password(KEYRING_SERVICE, KEYRING_USERNAME, token)
+
+
+def _org_token_username(org_id):
+    return f"orgId:{org_id}"
+
+
+def load_token_for_org(org_id):
+    if not org_id:
+        return None
+    return keyring.get_password(KEYRING_SERVICE, _org_token_username(org_id))
+
+
+def save_token_for_org(org_id, token):
+    keyring.set_password(KEYRING_SERVICE, _org_token_username(org_id), token)
 
 
 def delete_token_secure():
@@ -69,7 +83,15 @@ def get_token_or_exit():
     if legacy_token:
         return legacy_token
 
-    print("Error: not configured. Run 'infisical-utils init' first.")
+    print("Error: not configured. Run 'ih init' first.")
+    raise SystemExit(1)
+
+
+def get_token_for_org_or_exit(org_id):
+    token = load_token_for_org(org_id)
+    if token:
+        return token
+    print(f"Error: missing token for org '{org_id}'. Run 'ih init token --org-id {org_id}'.")
     raise SystemExit(1)
 
 
@@ -85,6 +107,10 @@ def get_default(key):
     return entry
 
 
+def get_global(key):
+    return get_default(key)
+
+
 def set_default(key, value):
     config = load_config() or {}
     if "defaults" not in config:
@@ -93,12 +119,20 @@ def set_default(key, value):
     save_config(config)
 
 
+def set_global(key, value):
+    set_default(key, value)
+
+
 def remove_default(key):
     config = load_config()
     if not config or "defaults" not in config:
         return
     config["defaults"].pop(key, None)
     save_config(config)
+
+
+def remove_global(key):
+    remove_default(key)
 
 
 def load_local_inf():
@@ -121,3 +155,25 @@ def save_local_inf(org_id, project_id, environment):
     }
     with open(LOCAL_INF_FILE, "w") as f:
         yaml.safe_dump(payload, f, sort_keys=False)
+
+
+def ensure_local_repo_or_exit():
+    if not LOCAL_INF_FILE.exists():
+        print("Error: repository not initialized in current directory. Run 'ih init folder' first.")
+        raise SystemExit(1)
+
+
+def set_local_value(key, value):
+    ensure_local_repo_or_exit()
+    data = load_local_inf() or {}
+    data[key] = value
+    with open(LOCAL_INF_FILE, "w") as f:
+        yaml.safe_dump(data, f, sort_keys=False)
+
+
+def remove_local_value(key):
+    ensure_local_repo_or_exit()
+    data = load_local_inf() or {}
+    data.pop(key, None)
+    with open(LOCAL_INF_FILE, "w") as f:
+        yaml.safe_dump(data, f, sort_keys=False)
