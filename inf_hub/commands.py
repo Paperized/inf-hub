@@ -112,6 +112,28 @@ def _interactive_secret_name(api, project_id: str, environment: str, allow_new: 
     return ui.autocomplete_choice("Select secret name", keys), False
 
 
+def _display_rollback_versions(api, project_id: str, environment: str, secret_name: str) -> tuple[int, list[tuple[int, str]]]:
+    result = api.get_secret(project_id, environment, secret_name)
+    current = result.get("secret", {})
+    current_version = int(current.get("version", 1))
+    current_value = str(current.get("secretValue", ""))
+    ui.print_line(f"Current version v{current_version} value {current_value}")
+
+    versions: list[tuple[int, str]] = []
+    for version in range(current_version - 1, 0, -1):
+        try:
+            secret = api.get_secret(project_id, environment, secret_name, version=version).get("secret", {})
+            versions.append((version, str(secret.get("secretValue", ""))))
+        except Exception:
+            continue
+
+    if versions:
+        rows = [[value, f"v{version}"] for version, value in versions]
+        ui.print_table("Rollback versions", ["Value", "Version"], rows)
+
+    return current_version, versions
+
+
 def _require_token_id(args: Namespace, allow_prompt: bool) -> str:
     token_id = resolve_token_id(args, allow_prompt=allow_prompt, interactive_token_selector=_interactive_token_id)
     if not token_id:
@@ -386,12 +408,11 @@ def cmd_push(args: Namespace) -> None:
         push_updates(api, project_id, environment, to_apply)
     out_file = args.file or ".env"
     synced = sync_local_if_exists(api, project_id, environment, out_file)
-    ui.print_line(f"Pushed {len(to_apply)} secrets to Env: {environment} from {source_desc}.")
-    ui.print_line(f"Ignored {len(ignored)} unchanged secrets.")
-    if to_apply:
-        ui.print_line(f"Updated keys: {', '.join([u.key for u in to_apply])}")
+    msg = f"Pushed {len(to_apply)} secrets to {environment}"
     if ignored:
-        ui.print_line(f"Ignored keys: {', '.join([u.key for u in ignored])}")
+        msg += f" and ignored {len(ignored)}"
+    msg += "."
+    ui.print_line(msg)
     if synced:
         ui.print_line(f"Updated local file: {synced}.")
 
@@ -434,7 +455,12 @@ def cmd_rollback(args: Namespace) -> None:
     if not version:
         if args.yes:
             raise ValidationError("--version is required with --yes")
-        version = ui.prompt("Version to rollback to")
+        current_version, versions = _display_rollback_versions(api, project_id, environment, secret_name)
+        if current_version <= 1 or not versions:
+            raise ValidationError("no previous versions available for rollback")
+        choices = [f"{value} | v{version_num}" for version_num, value in versions]
+        selected = ui.autocomplete_choice("Select version to rollback to", choices)
+        version = selected.rsplit("| v", 1)[-1].strip()
     try:
         version_num = int(version)
     except ValueError as exc:
