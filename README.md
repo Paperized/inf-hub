@@ -30,6 +30,15 @@ Main commands:
 - `ih`
 - `ih-dc`
 
+## Interactive-first workflow
+
+All core commands are designed to run comfortably in interactive mode:
+- guided prompts and selection menus (questionary)
+- API-backed choices for org/project/environment
+- autocomplete support for IDs, environments, and secret names
+
+You can run the steps below without flags and let `ih` guide the flow.
+
 ## Headless setup (Debian/Ubuntu)
 
 `inf-hub` uses Python `keyring` with `keyring-pass`. In headless environments, install and initialize `pass`.
@@ -66,13 +75,13 @@ export INFISICAL_API_URL="https://your-infisical-host"
 ### 2) Save token for one org
 
 ```bash
-ih init token --org-id "<org-uuid>" --token "<access-token>" --yes
+ih init token
 ```
 
 ### 3) Initialize current folder
 
 ```bash
-ih init folder --org-id "<org-uuid>" --project-id "<project-uuid>" --environment dev --yes
+ih init folder
 ```
 
 This creates `.inf` in current directory. From now on, commands automatically use `.inf` context unless overridden by flags.
