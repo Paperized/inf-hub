@@ -9,7 +9,8 @@ from inf_hub.errors import ConfigError
 def parse_id(value: str | None) -> str | None:
     if not value:
         return None
-    return value.split("|")[0].strip()
+    parts = value.split("|")
+    return parts[-1].strip()
 
 
 def load_local_inf_safe() -> dict | None:

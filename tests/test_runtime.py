@@ -8,7 +8,7 @@ from inf_hub.runtime import effective_local_value, parse_id
 
 class RuntimeTests(unittest.TestCase):
     def test_parse_id(self):
-        self.assertEqual(parse_id("abc | Name"), "abc")
+        self.assertEqual(parse_id("Name | abc"), "abc")
         self.assertIsNone(parse_id(None))
 
     def test_effective_local_value_reads_inf(self):

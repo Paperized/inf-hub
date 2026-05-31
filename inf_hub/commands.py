@@ -63,7 +63,7 @@ def _interactive_project_id(api) -> str | None:
         raise ValidationError(f"cannot load projects for selected token: {exc}") from exc
     if not projects:
         raise ValidationError("no projects found for selected token")
-    choices = [f"{p['id']} | {p['name']}" for p in projects]
+    choices = [f"{p['name']} | {p['id']}" for p in projects]
     return parse_id(ui.autocomplete_choice("Select project", choices))
 
 
@@ -89,7 +89,7 @@ def _interactive_identity_id(api, org_id: str) -> str | None:
         raise ValidationError(f"cannot load identities for selected token: {exc}") from exc
     if not identities:
         raise ValidationError("no identities found for selected token")
-    choices = [f"{i.get('identityId', i.get('id'))} | {i.get('identity', {}).get('name', 'unknown')}" for i in identities]
+    choices = [f"{i.get('identity', {}).get('name', 'unknown')} | {i.get('identityId', i.get('id'))}" for i in identities]
     return parse_id(ui.autocomplete_choice("Select machine identity", choices))
 
 
@@ -286,7 +286,7 @@ def cmd_create_project(args: Namespace) -> None:
 def cmd_list_orgs(_: Namespace) -> None:
     tokens = get_tokens_or_exit()
     for t in tokens:
-        ui.print_line(f"{t.get('orgId', '')} | {t['tokenId']}")
+        ui.print_line(f"{t['tokenId']} | {t.get('orgId', '')}")
 
 
 def cmd_list_projects(args: Namespace) -> None:
@@ -297,7 +297,7 @@ def cmd_list_projects(args: Namespace) -> None:
         ui.print_line("No projects found.")
         return
     for p in projects:
-        ui.print_line(f"{p['id']} | {p['name']} | {p['slug']}")
+        ui.print_line(f"{p['name']} | {p['id']} | {p['slug']}")
 
 
 def cmd_list_identities(args: Namespace) -> None:
@@ -308,7 +308,7 @@ def cmd_list_identities(args: Namespace) -> None:
         ui.print_line("No identities found.")
         return
     for i in identities:
-        ui.print_line(f"{i.get('identityId', i.get('id'))} | {i.get('identity', {}).get('name', 'unknown')} | {i.get('role', '')}")
+        ui.print_line(f"{i.get('identity', {}).get('name', 'unknown')} | {i.get('identityId', i.get('id'))} | {i.get('role', '')}")
 
 
 def cmd_set(args: Namespace) -> None:
