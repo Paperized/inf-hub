@@ -157,6 +157,12 @@ def cmd_unregister_token(args: Namespace) -> None:
     if not entry:
         raise ValidationError(f"tokenId '{token_id}' not found")
 
+    if not args.yes:
+        ui.print_table(
+            "Pending token removal",
+            ["orgId", "tokenId"],
+            [[entry.get("orgId", ""), token_id]],
+        )
     if not args.yes and not ui.confirm(f"Remove token '{token_id}' from config and keyring?"):
         ui.print_line("Aborted.")
         return
@@ -186,6 +192,12 @@ def cmd_init_folder(args: Namespace) -> None:
     if not token_id or not project_id:
         raise ValidationError("tokenId and projectId are required")
 
+    if not args.yes:
+        ui.print_table(
+            "Pending local context initialization",
+            ["tokenId", "projectId", "environment"],
+            [[token_id, project_id, environment]],
+        )
     if not args.yes and not ui.confirm("Proceed with local repository initialization?"):
         ui.print_line("Aborted.")
         return
@@ -223,6 +235,12 @@ def cmd_create_project(args: Namespace) -> None:
     if role and role not in VALID_ROLES:
         raise ValidationError(f"invalid role '{role}'. Must be one of: {', '.join(VALID_ROLES)}")
 
+    if not args.yes:
+        ui.print_table(
+            "Pending project creation",
+            ["tokenId", "orgId", "projectName", "slug", "identityId", "role"],
+            [[token_id, org_id, name, slug, identity_id or "", role or ""]],
+        )
     if not args.yes and not ui.confirm("Proceed?"):
         ui.print_line("Aborted.")
         return
@@ -344,9 +362,11 @@ def cmd_push(args: Namespace) -> None:
 
     current = {s.get("secretKey"): s.get("secretValue", "") for s in api.list_secrets(project_id, environment).get("secrets", [])}
     if not args.yes:
+        rows: list[list[str]] = []
         for update in updates:
             old = current.get(update.key)
-            ui.print_line(f"{update.key}: {('<MISSING>' if old is None else old)} -> {update.value}")
+            rows.append([update.key, "<MISSING>" if old is None else old, update.value])
+        ui.print_table("Pending secret updates", ["Secret", "Current", "New"], rows)
         if not ui.confirm("Proceed?"):
             ui.print_line("Aborted.")
             return
@@ -403,6 +423,12 @@ def cmd_rollback(args: Namespace) -> None:
     except ValueError as exc:
         raise ValidationError(f"invalid version '{version}'") from exc
 
+    if not args.yes:
+        ui.print_table(
+            "Pending rollback",
+            ["tokenId", "projectId", "environment", "secret", "version"],
+            [[token_id, project_id, environment, secret_name, str(version_num)]],
+        )
     if not args.yes and not ui.confirm(f"Rollback '{secret_name}' to version {version_num}?"):
         ui.print_line("Aborted.")
         return

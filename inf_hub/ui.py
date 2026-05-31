@@ -15,6 +15,27 @@ def print_line(message: str) -> None:
     print(message)
 
 
+def print_table(title: str, columns: list[str], rows: list[list[str]]) -> None:
+    try:
+        from rich.console import Console
+        from rich.table import Table
+
+        table = Table(title=title)
+        for col in columns:
+            table.add_column(col)
+        for row in rows:
+            table.add_row(*row)
+        Console().print(table)
+        return
+    except Exception:
+        pass
+
+    print(title)
+    print(" | ".join(columns))
+    for row in rows:
+        print(" | ".join(row))
+
+
 def select(message: str, choices: Sequence[str]) -> str:
     if HAS_QUESTIONARY:
         result = questionary.select(message, choices=list(choices)).ask()
