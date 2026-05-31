@@ -35,19 +35,11 @@ def select(message: str, choices: Sequence[str]) -> str:
 
 def autocomplete_choice(message: str, choices: Sequence[str]) -> str:
     if HAS_QUESTIONARY:
-        result = questionary.autocomplete(
-            message,
-            choices=list(choices),
-            validate=lambda text: text in choices or "Choose a value from autocomplete list",
-        ).ask()
+        result = questionary.select(message, choices=list(choices)).ask()
         if result is None:
             raise InteractiveAbort("Operation cancelled")
         return result
-    while True:
-        value = input(f"{message}: ").strip()
-        if value in choices:
-            return value
-        print("Choose a value from the available list.")
+    return select(message, choices)
 
 
 def prompt(label: str, secret: bool = False, default: str | None = None) -> str:
