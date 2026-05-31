@@ -38,6 +38,34 @@ def pair_updates(keys: list[str], values: list[str]) -> list[SecretUpdate]:
     return [SecretUpdate(key=k, value=v) for k, v in zip(keys, values)]
 
 
+def read_env_map(path: str) -> dict[str, str]:
+    p = Path(path)
+    if not p.exists():
+        return {}
+    result: dict[str, str] = {}
+    for item in parse_env_file(path):
+        result[item.key] = item.value
+    return result
+
+
+def upsert_env_file(path: str, updates: list[SecretUpdate]) -> tuple[int, int]:
+    env_map = read_env_map(path)
+    changed = 0
+    added = 0
+    for upd in updates:
+        current = env_map.get(upd.key)
+        if current == upd.value:
+            continue
+        if upd.key not in env_map:
+            added += 1
+        changed += 1
+        env_map[upd.key] = upd.value
+    with open(path, "w") as f:
+        for key in sorted(env_map.keys(), key=str.lower):
+            f.write(f"{key}={env_map[key]}\n")
+    return changed, added
+
+
 def resolve_target(api: InfisicalAPI, args: Namespace, select_project, select_environment) -> tuple[str, str]:
     project_id = parse_id(getattr(args, "project_id", None)) or effective_local_value("projectId")
     environment = getattr(args, "environment", None) or effective_local_value("environment") or "dev"

@@ -52,7 +52,7 @@ ih register token
 ```
 
 By default, `ih register token`:
-- Extracts org-id and org-name from JWT
+- Extracts org-id from JWT
 - Requires a unique `tokenId` name
 - Stores secret in keyring as `tokenId:{tokenId}`
 
@@ -79,8 +79,11 @@ ih push
 # Push custom file
 ih push -f .env.prod
 
-# Push single keys (inline mode)
-ih push -k API_URL -v https://... -k DEBUG -v false
+# Update local .env keys only (no remote changes)
+ih update -k API_URL -v https://... -k DEBUG -v false
+
+# Interactive local update (key list from remote + local file)
+ih update
 
 # Secret history
 ih history --name API_KEY
@@ -99,7 +102,8 @@ ih rollback --name API_KEY --version 2 -f .env.rollback
 - `ih set TYPE --value VALUE`
 - `ih unset TYPE`
 - `ih pull [-f path | -p]`
-- `ih push [-f path | (-k KEY -v VALUE)...]`
+- `ih push [-f path]`
+- `ih update [-f path | (-k KEY -v VALUE)...]`
 - `ih history --name NAME`
 - `ih rollback --name NAME --version N [-f path]`
 
@@ -107,7 +111,8 @@ ih rollback --name API_KEY --version 2 -f .env.rollback
 
 - `ih set/unset` always target local `.inf` context.
 - If a command targets an unknown tokenId, it fails and asks you to run `ih register token`.
-- `ih push` file mode and inline mode are mutually exclusive.
+- `ih push` always pushes a full env file (`.env` by default).
+- `ih update` only updates local files and never writes to remote.
 
 ## Architecture
 

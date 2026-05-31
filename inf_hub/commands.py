@@ -25,10 +25,12 @@ from inf_hub.runtime import build_api_for_token, parse_id, resolve_token_id
 from inf_hub.services import (
     pair_updates,
     parse_env_file,
+    read_env_map,
     push_updates,
     resolve_target,
     rollback_secret,
     sync_local_if_exists,
+    upsert_env_file,
     write_env_file,
 )
 
@@ -128,6 +130,18 @@ def _interactive_secret_name(api, project_id: str, environment: str, allow_new: 
         return selected, False
 
     return ui.autocomplete_choice("Select secret name", keys), False
+
+
+def _interactive_update_secret_name(local_keys: list[str], remote_keys: list[str]) -> tuple[str, bool]:
+    keys = sorted(set(local_keys + remote_keys), key=str.lower)
+    choices = keys + ["+ Create new secret"]
+    selected = ui.autocomplete_choice("Select secret name", choices)
+    if selected == "+ Create new secret":
+        new_name = ui.prompt("New secret name")
+        if not new_name:
+            raise ValidationError("secret name is required")
+        return new_name, True
+    return selected, False
 
 
 def _display_rollback_versions(api, project_id: str, environment: str, secret_name: str) -> tuple[int, list[tuple[int, str]]]:
@@ -376,25 +390,8 @@ def cmd_push(args: Namespace) -> None:
     api, _entry = build_api_for_token(token_id)
     project_id, environment = resolve_target(api, args, _interactive_project_id, _interactive_environment)
 
-    has_file = bool(args.file)
-    has_inline = bool(args.k or args.v)
-    if has_file and has_inline:
-        raise ValidationError("use either -f or -k/-v, not both")
-
-    if has_inline:
-        updates = pair_updates(args.k or [], args.v or [])
-        source_desc = "inline key/value input"
-    elif not has_file and not args.yes:
-        secret_name, is_new = _interactive_secret_name(api, project_id, environment, allow_new=True)
-        secret_value = ui.prompt("Secret value", secret=True)
-        updates = [SecretUpdate(key=secret_name, value=secret_value)]
-        source_desc = "interactive input"
-        if is_new:
-            ui.print_line(f"New secret selected: {secret_name}")
-    else:
-        path = args.file or ".env"
-        updates = parse_env_file(path)
-        source_desc = f"file: {path}"
+    path = args.file or ".env"
+    updates = parse_env_file(path)
 
     if not updates:
         raise ValidationError("no values to push")
@@ -423,8 +420,7 @@ def cmd_push(args: Namespace) -> None:
 
     if to_apply:
         push_updates(api, project_id, environment, to_apply)
-    out_file = args.file or ".env"
-    synced = sync_local_if_exists(api, project_id, environment, out_file)
+    synced = sync_local_if_exists(api, project_id, environment, path)
     msg = f"Pushed {len(to_apply)} secrets to {environment}"
     if ignored:
         msg += f" and ignored {len(ignored)}"
@@ -432,6 +428,36 @@ def cmd_push(args: Namespace) -> None:
     ui.print_line(msg)
     if synced:
         ui.print_line(f"Updated local file: {synced}.")
+
+
+def cmd_update(args: Namespace) -> None:
+    out_file = args.file or ".env"
+    has_inline = bool(args.k or args.v)
+
+    if has_inline:
+        updates = pair_updates(args.k or [], args.v or [])
+    else:
+        if args.yes:
+            raise ValidationError("with --yes provide -k/-v pairs")
+        token_id = _require_token_id(args, allow_prompt=True)
+        api, _entry = build_api_for_token(token_id)
+        project_id, environment = resolve_target(api, args, _interactive_project_id, _interactive_environment)
+        remote_keys = sorted(
+            [s.get("secretKey") for s in api.list_secrets(project_id, environment).get("secrets", []) if s.get("secretKey")],
+            key=str.lower,
+        )
+        local_keys = sorted(read_env_map(out_file).keys(), key=str.lower)
+        secret_name, is_new = _interactive_update_secret_name(local_keys, remote_keys)
+        secret_value = ui.prompt("Secret value", secret=True)
+        updates = [SecretUpdate(key=secret_name, value=secret_value)]
+        if is_new:
+            ui.print_line(f"New secret selected: {secret_name}")
+
+    changed, added = upsert_env_file(out_file, updates)
+    if changed == 0:
+        ui.print_line(f"No local changes for {out_file}.")
+        return
+    ui.print_line(f"Updated {changed} local secrets in {out_file}" + (f" ({added} added)." if added else "."))
 
 
 def cmd_history(args: Namespace) -> None:

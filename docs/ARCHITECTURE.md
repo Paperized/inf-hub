@@ -22,7 +22,7 @@ Design goals:
 ## Token-Centric Model
 - Authentication key is `tokenId` (user-defined unique name).
 - Secret is stored in keyring using `tokenId:{tokenId}`.
-- Config stores token metadata list (`tokenId`, `orgId`, `orgName`).
+- Config stores token metadata list (`tokenId`, `orgId`).
 - `.inf` stores local execution context (`tokenId`, `projectId`, `environment`).
 
 ## Context Precedence

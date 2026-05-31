@@ -17,6 +17,7 @@ from inf_hub.commands import (
     cmd_register_token,
     cmd_rollback,
     cmd_set,
+    cmd_update,
     cmd_unset,
     cmd_unregister_token,
 )
@@ -93,9 +94,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_push.add_argument("--project-id", help="Project ID")
     p_push.add_argument("--environment", "-e", help="Environment")
     p_push.add_argument("-f", "--file", help="Input file path")
-    p_push.add_argument("-k", action="append", help="Secret key (repeatable)")
-    p_push.add_argument("-v", action="append", help="Secret value (repeatable)")
     p_push.add_argument("--yes", "-y", action="store_true", help="Non-interactive")
+
+    p_update = sub.add_parser("update", help="Update local env file")
+    p_update.add_argument("--token-id", help="Token ID")
+    p_update.add_argument("--project-id", help="Project ID")
+    p_update.add_argument("--environment", "-e", help="Environment")
+    p_update.add_argument("-f", "--file", help="Local file path")
+    p_update.add_argument("-k", action="append", help="Secret key (repeatable)")
+    p_update.add_argument("-v", action="append", help="Secret value (repeatable)")
+    p_update.add_argument("--yes", "-y", action="store_true", help="Non-interactive")
 
     p_hist = sub.add_parser("history", help="Show secret history")
     p_hist.add_argument("--token-id", help="Token ID")
@@ -160,6 +168,9 @@ def dispatch(args: argparse.Namespace) -> None:
         return
     if args.command == "push":
         cmd_push(args)
+        return
+    if args.command == "update":
+        cmd_update(args)
         return
     if args.command == "history":
         cmd_history(args)
