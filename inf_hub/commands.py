@@ -52,8 +52,6 @@ def _extract_org_info_from_token(token: str | None) -> tuple[str | None, str | N
 
 def _interactive_token_id() -> str:
     tokens = get_tokens_or_exit()
-    if len(tokens) == 1:
-        return tokens[0]["tokenId"]
     choices = [f"{t['tokenId']} | {t.get('orgName', t.get('orgId', ''))}" for t in tokens]
     return parse_id(ui.autocomplete_choice("Select token", choices)) or ""
 
@@ -61,10 +59,10 @@ def _interactive_token_id() -> str:
 def _interactive_project_id(api) -> str | None:
     try:
         projects = api.list_projects().get("projects", [])
-    except Exception:
-        return None
+    except Exception as exc:
+        raise ValidationError(f"cannot load projects for selected token: {exc}") from exc
     if not projects:
-        return None
+        raise ValidationError("no projects found for selected token")
     choices = [f"{p['id']} | {p['name']}" for p in projects]
     return parse_id(ui.autocomplete_choice("Select project", choices))
 
@@ -72,25 +70,25 @@ def _interactive_project_id(api) -> str | None:
 def _interactive_environment(api, project_id: str) -> str | None:
     try:
         projects = api.list_projects().get("projects", [])
-    except Exception:
-        return None
+    except Exception as exc:
+        raise ValidationError(f"cannot load environments for selected project: {exc}") from exc
     for p in projects:
         if p["id"] == project_id:
             envs = p.get("environments", [])
             if not envs:
-                return None
+                raise ValidationError("no environments found for selected project")
             choices = [f"{e['slug']} | {e['name']}" for e in envs]
             return parse_id(ui.autocomplete_choice("Select environment", choices))
-    return None
+    raise ValidationError("selected project not found while resolving environments")
 
 
 def _interactive_identity_id(api, org_id: str) -> str | None:
     try:
         identities = api.list_identities(org_id).get("identities", [])
-    except Exception:
-        return None
+    except Exception as exc:
+        raise ValidationError(f"cannot load identities for selected token: {exc}") from exc
     if not identities:
-        return None
+        raise ValidationError("no identities found for selected token")
     choices = [f"{i.get('identityId', i.get('id'))} | {i.get('identity', {}).get('name', 'unknown')}" for i in identities]
     return parse_id(ui.autocomplete_choice("Select machine identity", choices))
 
@@ -183,9 +181,9 @@ def cmd_init_folder(args: Namespace) -> None:
             token_id = _interactive_token_id()
         api, _entry = build_api_for_token(token_id)
         if not project_id:
-            project_id = (_interactive_project_id(api) if api else None) or parse_id(ui.prompt("Project ID"))
+            project_id = _interactive_project_id(api)
         if not args.environment:
-            environment = (_interactive_environment(api, project_id) if api else None) or ui.prompt("Environment", default="dev")
+            environment = _interactive_environment(api, project_id)
     else:
         if not token_id or not project_id:
             raise ValidationError("--token-id and --project-id are required with --yes")
@@ -217,7 +215,7 @@ def cmd_create_project(args: Namespace) -> None:
             slug = ui.prompt("Slug", default=name)
         if ui.confirm("Add machine identity?"):
             if not identity_id:
-                identity_id = _interactive_identity_id(api, org_id) or parse_id(ui.prompt("Machine identity ID"))
+                identity_id = _interactive_identity_id(api, org_id)
             if not role:
                 role = ui.autocomplete_choice("Select role", list(VALID_ROLES))
         else:
