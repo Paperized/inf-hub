@@ -38,6 +38,7 @@ Execution context precedence is: explicit CLI args > local `.inf` > interactive 
 ih register token
 ih unregister token
 ih pull
+ih pull -f .env.inf
 ih pull -p
 ih push
 ih push -f .env.prod
@@ -45,3 +46,19 @@ ih push -k KEY -v VALUE -k KEY2 -v VALUE2
 ih history --name API_KEY
 ih rollback --name API_KEY --version 2 -f .env.rollback
 ```
+
+## Docker Compose integration
+
+Add to `.zshrc`:
+
+```bash
+ih-dc() {
+    [ -f .inf ] || { echo "Error: not an inf-hub project" >&2; return 1; }
+    setopt localtraps
+    trap 'rm -f .env.inf' EXIT INT TERM
+    ih pull -p > .env.inf || return 1
+    docker compose --env-file .env.inf "$@"
+}
+```
+
+Usage: `ih-dc up -d`, `ih-dc logs -f`, `ih-dc down`

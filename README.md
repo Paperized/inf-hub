@@ -28,7 +28,7 @@ pip install inf-hub
 
 Main commands:
 - `ih`
-- `ih-dc`
+- `ih-dc` (shell function for docker compose integration)
 
 ## Interactive-first workflow
 
@@ -70,6 +70,9 @@ This creates `.inf` in current directory. Commands then use local context unless
 # Pull remote env to local file (.env by default)
 ih pull
 
+# Pull remote env to custom file
+ih pull -f .env.inf
+
 # Print env to stdout (no file write)
 ih pull -p
 
@@ -90,6 +93,31 @@ ih history --name API_KEY
 
 # Rollback and sync local file (.env default, or custom with -f)
 ih rollback --name API_KEY --version 2 -f .env.rollback
+
+# Docker Compose integration (requires shell function from .zshrc)
+ih-dc up -d
+```
+
+## Shell integration (Docker Compose)
+
+Add to `.zshrc` or `.bashrc`:
+
+```bash
+ih-dc() {
+    [ -f .inf ] || { echo "Error: not an inf-hub project" >&2; return 1; }
+    setopt localtraps
+    trap 'rm -f .env.inf' EXIT INT TERM
+    ih pull -p > .env.inf || return 1
+    docker compose --env-file .env.inf "$@"
+}
+```
+
+Then use `ih-dc` as a drop-in replacement for `docker compose`:
+
+```bash
+ih-dc up -d
+ih-dc logs -f
+ih-dc down
 ```
 
 ## Command map
