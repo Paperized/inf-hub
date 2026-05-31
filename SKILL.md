@@ -10,6 +10,7 @@ It is designed for project bootstrap + versioned env operations (`pull`, `push`,
 - keeps env workflow operational and repeatable
 - binds each folder to org/project/environment
 - supports multi-org by storing one token per org
+- maintains a saved list of configured orgs for validation and interactive selection
 - works in interactive mode with API-backed selection menus
 
 ## Minimal setup
@@ -17,14 +18,27 @@ It is designed for project bootstrap + versioned env operations (`pull`, `push`,
 ```bash
 export INFISICAL_API_URL="https://your-infisical-host"
 
-# token is bound to orgId
+# token is bound to orgId (also adds org to saved list)
+# validates token by default (JWT decode + API test call)
+# extracts org-name from JWT automatically
 ih init token --org-id "<org-uuid>" --token "<token>" --yes
+
+# skip validation if needed (e.g., API not reachable yet)
+ih init token --org-id "<org-uuid>" --token "<token>" --yes --skip-checks
+
+# provide org-name explicitly
+ih init token --org-id "<org-uuid>" --org-name "My Org" --token "<token>" --yes
 
 # initialize folder context
 ih init folder --org-id "<org-uuid>" --project-id "<project-uuid>" --environment dev --yes
 ```
 
 After this, commands read defaults from `.inf`.
+
+## Global vs local config
+
+Only `orgId` and `environment` can be set globally via `ih set TYPE --value VALUE --global`.
+`projectId` and `identityId` are org-specific and can only be set locally (requires `.inf`).
 
 ## Core commands
 

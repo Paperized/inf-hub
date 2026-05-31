@@ -11,6 +11,7 @@ KEYRING_USERNAME = "default-token"
 LOCAL_INF_FILE = Path(".inf")
 
 DEFAULT_TYPES = ("orgId", "identityId", "projectId", "environment")
+GLOBAL_TYPES = ("orgId", "environment")
 
 
 def ensure_config_dir():
@@ -133,6 +134,54 @@ def remove_default(key):
 
 def remove_global(key):
     remove_default(key)
+
+
+def load_orgs():
+    config = load_config()
+    raw = (config or {}).get("orgs", [])
+    orgs = []
+    for entry in raw:
+        if isinstance(entry, str):
+            orgs.append({"id": entry, "name": entry})
+        elif isinstance(entry, dict):
+            orgs.append({"id": entry.get("id", ""), "name": entry.get("name", entry.get("id", ""))})
+    return orgs
+
+
+def get_org_ids():
+    return [o["id"] for o in load_orgs()]
+
+
+def save_org(org_id, org_name=None):
+    config = load_config() or {}
+    orgs = config.get("orgs", [])
+    normalized = []
+    found = False
+    for entry in orgs:
+        if isinstance(entry, str):
+            if entry == org_id:
+                normalized.append({"id": org_id, "name": org_name or org_id})
+                found = True
+            else:
+                normalized.append({"id": entry, "name": entry})
+        elif isinstance(entry, dict):
+            if entry.get("id") == org_id:
+                normalized.append({"id": org_id, "name": org_name or entry.get("name", org_id)})
+                found = True
+            else:
+                normalized.append(entry)
+    if not found:
+        normalized.append({"id": org_id, "name": org_name or org_id})
+    config["orgs"] = normalized
+    save_config(config)
+
+
+def get_orgs_or_exit():
+    orgs = load_orgs()
+    if not orgs:
+        print("Error: no organizations configured. Run 'ih init token' first.")
+        raise SystemExit(1)
+    return orgs
 
 
 def load_local_inf():

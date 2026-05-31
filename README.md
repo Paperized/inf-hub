@@ -14,8 +14,8 @@ Infisical can be self-hosted, including free/self-managed setups:
 - Git-style CLI for env workflows: `pull`, `push`, `history`, `rollback`
 - Folder-local context via `.inf` (`orgId`, `projectId`, `environment`)
 - Multi-org token model: one token per org (`orgId:{uuid}` in keyring)
+- Saved organization list: `ih init token` adds orgs to a local list used for validation and interactive selection
 - Interactive menus (questionary) backed by live API data
-- Smart autocomplete for org/project/env/secret names
 - Clear one-line success messages with target env/file info
 
 ## Install
@@ -34,8 +34,8 @@ Main commands:
 
 All core commands are designed to run comfortably in interactive mode:
 - guided prompts and selection menus (questionary)
-- API-backed choices for org/project/environment
-- autocomplete support for IDs, environments, and secret names
+- API-backed choices for project/environment
+- Organization selection from saved list (populated via `ih init token`)
 
 You can run the steps below without flags and let `ih` guide the flow.
 
@@ -76,6 +76,23 @@ export INFISICAL_API_URL="https://your-infisical-host"
 
 ```bash
 ih init token
+```
+
+By default, `ih init token`:
+- Extracts org-id and org-name from the JWT token
+- Validates the token by making a test API call
+- Uses the extracted org-name as default (you can override it)
+
+Use `--skip-checks` to bypass validation (e.g., when the API is not yet reachable):
+
+```bash
+ih init token --skip-checks
+```
+
+You can also provide org-name explicitly:
+
+```bash
+ih init token --org-name "My Organization"
 ```
 
 ### 3) Initialize current folder
@@ -127,5 +144,7 @@ ih rollback --name API_KEY --version 2 -f .env.rollback
 ## Notes
 
 - In local scope, `ih set/unset` requires `.inf`; use `--global` for global config.
+- Only `orgId` and `environment` can be set globally; `projectId` and `identityId` are org-specific and can only be set locally.
 - If a command targets an org without a saved token, it fails explicitly and tells you which org token is missing.
+- If a command targets an org not in the saved list, it fails and tells you to run `ih init token` to add it.
 - `ih push` file mode and inline mode are mutually exclusive.

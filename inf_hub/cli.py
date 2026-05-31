@@ -18,15 +18,20 @@ from inf_hub.api import InfisicalAPI
 from inf_hub.config import (
     CONFIG_FILE,
     DEFAULT_TYPES,
+    GLOBAL_TYPES,
     get_global,
+    get_org_ids,
+    get_orgs_or_exit,
     get_token_for_org_or_exit,
     load_config,
     load_local_inf,
+    load_orgs,
     load_token_for_org,
     remove_global,
     remove_local_value,
     save_config,
     save_local_inf,
+    save_org,
     save_token_secure,
     save_token_for_org,
     set_global,
@@ -78,48 +83,36 @@ def _get_api_for_org_silent(org_id):
         return None
 
 
-def _extract_org_id_from_token(token):
+def _extract_org_info_from_token(token):
     if not token:
-        return None
+        return None, None
     try:
         parts = token.split(".")
         if len(parts) != 3:
-            return None
+            return None, None
         payload = parts[1]
         payload += "=" * (-len(payload) % 4)
         data = json.loads(base64.urlsafe_b64decode(payload.encode()).decode())
-        return data.get("organizationId")
+        return data.get("organizationId"), data.get("organizationName")
     except Exception:
-        return None
+        return None, None
 
 
-def _get_org_entries(api):
-    """Return org entries enriched with token org fallback when needed."""
-    entries = []
-    try:
-        entries = api.list_organizations().get("organizations", [])
-    except Exception:
-        entries = []
-
-    token_org_id = _resolve_org_id(argparse.Namespace(), allow_prompt=False, api=None)
-    token = load_token_for_org(token_org_id) if token_org_id else None
-    token_org_id = _extract_org_id_from_token(token)
-    if token_org_id and not any(o.get("id") == token_org_id for o in entries):
-        entries.append(
-            {
-                "id": token_org_id,
-                "name": "Token Org",
-                "projects": [],
-            }
-        )
-    return entries
+def _extract_org_id_from_token(token):
+    org_id, _ = _extract_org_info_from_token(token)
+    return org_id
 
 
-def _resolve_org_id(args, allow_prompt=False, api=None):
+def _resolve_org_id(args, allow_prompt=False):
     explicit = _parse_id(getattr(args, "org_id", None)) if hasattr(args, "org_id") else None
     org_id = explicit or _effective_value("orgId")
+    if org_id:
+        org_ids = get_org_ids()
+        if org_ids and org_id not in org_ids:
+            _print(f"Error: organization '{org_id}' not found in configured orgs. Run 'ih init token' to add it.")
+            raise SystemExit(1)
     if not org_id and allow_prompt:
-        org_id = (_interactive_org_id(api) if api else None) or _parse_id(_prompt("Organization ID"))
+        org_id = _interactive_org_id()
     return org_id
 
 
@@ -129,6 +122,10 @@ def _api_for_org_or_exit(org_id):
         _print("Error: INFISICAL_API_URL is not set.")
         _print("Set it with:")
         _print("  export INFISICAL_API_URL=https://app.infisical.com")
+        raise SystemExit(1)
+    org_ids = get_org_ids()
+    if org_ids and org_id not in org_ids:
+        _print(f"Error: organization '{org_id}' not found in configured orgs. Run 'ih init token' to add it.")
         raise SystemExit(1)
     token = get_token_for_org_or_exit(org_id)
     return InfisicalAPI(base_url, token)
@@ -159,7 +156,10 @@ def _warn_local_override(local_key, explicit):
 
 def _select(message, choices):
     if HAS_QUESTIONARY:
-        return questionary.select(message, choices=choices).ask()
+        result = questionary.select(message, choices=choices).ask()
+        if result is None:
+            raise KeyboardInterrupt
+        return result
     return None
 
 
@@ -167,8 +167,12 @@ def _prompt(label, secret=False, default=None):
     if HAS_QUESTIONARY:
         if secret:
             v = questionary.password(label).ask()
+            if v is None:
+                raise KeyboardInterrupt
             return (v or "").strip()
         v = questionary.text(label, default=default or "").ask()
+        if v is None:
+            raise KeyboardInterrupt
         return (v or "").strip() or default
     suffix = f" [{default}]" if default else ""
     if secret:
@@ -180,18 +184,20 @@ def _prompt(label, secret=False, default=None):
 
 def _confirm(message):
     if HAS_QUESTIONARY:
-        return bool(questionary.confirm(message, default=False).ask())
+        result = questionary.confirm(message, default=False).ask()
+        if result is None:
+            raise KeyboardInterrupt
+        return bool(result)
     return input(f"{message} [y/N]: ").lower() in ("y", "yes")
 
 
-def _interactive_org_id(api):
-    try:
-        orgs = _get_org_entries(api)
-    except Exception:
-        return None
-    if not orgs:
-        return None
-    return _parse_id(_select("Select organization", [f"{o['id']} | {o.get('name', o['id'])}" for o in orgs]))
+def _interactive_org_id():
+    orgs = get_orgs_or_exit()
+    if len(orgs) == 1:
+        return orgs[0]["id"]
+    choices = [f"{o['id']} | {o['name']}" for o in orgs]
+    selected = _select("Select organization", choices)
+    return _parse_id(selected)
 
 
 def _interactive_project_id(api):
@@ -233,95 +239,7 @@ def _interactive_identity_id(api, org_id):
     return _parse_id(_select("Select machine identity", choices))
 
 
-def _complete_org_ids(prefix, **kwargs):
-    try:
-        org_id = _effective_value("orgId")
-        api = _get_api_for_org_silent(org_id)
-        if not api:
-            token = load_token_for_org(org_id) if org_id else None
-            token_org_id = _extract_org_id_from_token(token)
-            if token_org_id:
-                return [f"{token_org_id} | Token Org"]
-            return []
-        return [f"{o['id']} | {o.get('name', o['id'])}" for o in _get_org_entries(api)]
-    except Exception:
-        return []
 
-
-def _complete_project_ids(prefix, **kwargs):
-    org_id = _effective_value("orgId")
-    api = _get_api_for_org_silent(org_id)
-    if not api:
-        return []
-    try:
-        return [f"{p['id']} | {p['name']}" for p in api.list_projects().get("projects", [])]
-    except Exception:
-        return []
-
-
-def _complete_environments(prefix, parsed_args=None, **kwargs):
-    org_id = _parse_id(getattr(parsed_args, "org_id", None)) if parsed_args is not None else None
-    org_id = org_id or _effective_value("orgId")
-    api = _get_api_for_org_silent(org_id)
-    if not api:
-        return []
-    try:
-        project_id = None
-        if parsed_args is not None:
-            project_id = _parse_id(getattr(parsed_args, "project_id", None))
-        project_id = project_id or _effective_value("projectId")
-        if not project_id:
-            return []
-        projects = api.list_projects().get("projects", [])
-        for p in projects:
-            if p["id"] == project_id:
-                return [e["slug"] for e in p.get("environments", [])]
-        return []
-    except Exception:
-        return []
-
-
-def _complete_identity_ids(prefix, **kwargs):
-    org_id = _effective_value("orgId")
-    api = _get_api_for_org_silent(org_id)
-    if not api:
-        return []
-    try:
-        org_id = _effective_value("orgId")
-        if not org_id:
-            return []
-        identities = api.list_identities(org_id).get("identities", [])
-        return [f"{i['identityId']} | {i['identity']['name']}" for i in identities]
-    except Exception:
-        return []
-
-
-def _complete_secret_names(prefix, parsed_args, **kwargs):
-    org_id = _parse_id(getattr(parsed_args, "org_id", None)) or _effective_value("orgId")
-    api = _get_api_for_org_silent(org_id)
-    if not api:
-        return []
-    try:
-        project_id = _parse_id(getattr(parsed_args, "project_id", None)) or _effective_value("projectId")
-        environment = getattr(parsed_args, "environment", None) or _effective_value("environment") or "dev"
-        if not project_id:
-            return []
-        return [s.get("secretKey", "") for s in api.list_secrets(project_id, environment).get("secrets", []) if s.get("secretKey")]
-    except Exception:
-        return []
-
-
-def _complete_set_value(prefix, parsed_args, **kwargs):
-    t = getattr(parsed_args, "type", None)
-    if t == "orgId":
-        return _complete_org_ids(prefix)
-    if t == "projectId":
-        return _complete_project_ids(prefix)
-    if t == "identityId":
-        return _complete_identity_ids(prefix)
-    if t == "environment":
-        return _complete_environments(prefix, parsed_args)
-    return []
 
 
 def _parse_env_file(path):
@@ -357,11 +275,18 @@ def cmd_init_token(args):
         _print("  export INFISICAL_API_URL=https://app.infisical.com")
 
     org_id = _parse_id(args.org_id) if args.org_id else None
+    org_name = args.org_name
     token = args.token
+    skip_checks = args.skip_checks
     if not args.yes and not token:
         token = _prompt("Infisical token", secret=True)
+    
+    token_org_id, token_org_name = _extract_org_info_from_token(token)
+    
     if not args.yes and not org_id:
-        org_id = _parse_id(_prompt("Organization ID"))
+        org_id = _parse_id(_prompt("Organization ID", default=token_org_id))
+    if not args.yes and not org_name:
+        org_name = _prompt("Organization name", default=token_org_name)
     if args.yes and not token:
         _print("Error: --token is required with --yes")
         raise SystemExit(1)
@@ -372,18 +297,39 @@ def cmd_init_token(args):
         _print("Error: token is required.")
         raise SystemExit(1)
     if not org_id:
+        org_id = token_org_id
+    if not org_id:
         _print("Error: organization ID is required.")
         raise SystemExit(1)
 
+    if not skip_checks:
+        if token_org_id and token_org_id != org_id:
+            _print(f"Error: org-id '{org_id}' does not match token org-id '{token_org_id}'.")
+            _print("Use --skip-checks to bypass this check.")
+            raise SystemExit(1)
+
+        base_url = os.environ.get("INFISICAL_API_URL")
+        if base_url:
+            try:
+                test_api = InfisicalAPI(base_url, token)
+                test_api.list_projects()
+            except Exception as e:
+                _print(f"Error: token validation failed: {e}")
+                _print("Use --skip-checks to bypass this check.")
+                raise SystemExit(1)
+        else:
+            _print("Warning: cannot validate token without INFISICAL_API_URL. Use --skip-checks to suppress this warning.")
+
     save_token_for_org(org_id, token)
+    save_org(org_id, org_name)
     cfg = load_config() or {}
     cfg.pop("token", None)
     save_config(cfg)
-    _print(f"Token saved to secure keyring for org {org_id}. Global config: {CONFIG_FILE}")
+    _print(f"Token saved to secure keyring for org {org_id} ({org_name or org_id}). Global config: {CONFIG_FILE}")
 
 
 def cmd_init_folder(args):
-    org_id = _resolve_org_id(args, allow_prompt=False, api=None)
+    org_id = _resolve_org_id(args, allow_prompt=False)
     api = _get_api_for_org_silent(org_id)
     org_id = _parse_id(args.org_id) if args.org_id else None
     project_id = _parse_id(args.project_id) if args.project_id else None
@@ -391,7 +337,7 @@ def cmd_init_folder(args):
 
     if not args.yes:
         if not org_id:
-            org_id = (_interactive_org_id(api) if api else None) or _parse_id(_prompt("Organization ID"))
+            org_id = _interactive_org_id()
         if not project_id:
             project_id = (_interactive_project_id(api) if api else None) or _parse_id(_prompt("Project ID"))
         if not args.environment:
@@ -417,7 +363,7 @@ def cmd_create_project(args):
     _warn_local_override("orgId", args.org_id)
     name = args.name
     slug = args.slug
-    org_id = _resolve_org_id(args, allow_prompt=not args.yes, api=_get_api_for_org_silent(_resolve_org_id(args, False, None)))
+    org_id = _resolve_org_id(args, allow_prompt=not args.yes)
     if not org_id:
         _print("Error: orgId is required.")
         raise SystemExit(1)
@@ -465,25 +411,16 @@ def cmd_create_project(args):
 
 
 def cmd_list_orgs(args):
-    org_id = _resolve_org_id(args, allow_prompt=False, api=None)
-    api = _get_api_for_org_silent(org_id)
-    if not api:
-        org_id = _resolve_org_id(args)
-        if not org_id:
-            _print("No organizations found.")
-            return
-        _print_org_line(org_id, "Token Org", 0)
-        return
-    orgs = _get_org_entries(api)
+    orgs = load_orgs()
     if not orgs:
-        _print("No organizations found.")
+        _print("No organizations configured. Run 'ih init token' to add one.")
         return
     for o in orgs:
-        _print_org_line(o["id"], o.get("name", o["id"]), len(o.get("projects", [])))
+        _print(f"{o['id']} | {o['name']}")
 
 
 def cmd_list_projects(args):
-    org_id = _resolve_org_id(args, allow_prompt=not getattr(args, "yes", False), api=_get_api_for_org_silent(_resolve_org_id(args, False, None)))
+    org_id = _resolve_org_id(args, allow_prompt=not getattr(args, "yes", False))
     if not org_id:
         _print("Error: orgId is required.")
         raise SystemExit(1)
@@ -498,7 +435,7 @@ def cmd_list_projects(args):
 
 def cmd_list_identities(args):
     _warn_local_override("orgId", args.org_id)
-    org_id = _resolve_org_id(args, allow_prompt=not getattr(args, "yes", False), api=_get_api_for_org_silent(_resolve_org_id(args, False, None)))
+    org_id = _resolve_org_id(args, allow_prompt=not getattr(args, "yes", False))
     if not org_id:
         _print("Error: orgId is required.")
         raise SystemExit(1)
@@ -517,13 +454,42 @@ def cmd_set(args):
     if dtype not in DEFAULT_TYPES:
         _print(f"Error: invalid type '{dtype}'. Must be one of: {', '.join(DEFAULT_TYPES)}")
         raise SystemExit(1)
+
     if not value:
-        _print("Error: --value is required.")
+        if dtype == "orgId":
+            value = _interactive_org_id()
+        else:
+            org_id = _resolve_org_id(args, allow_prompt=True)
+            if not org_id:
+                _print("Error: orgId is required.")
+                raise SystemExit(1)
+            api = _api_for_org_or_exit(org_id)
+            if dtype == "projectId":
+                value = _interactive_project_id(api) or _parse_id(_prompt("Project ID"))
+            elif dtype == "environment":
+                project_id = _effective_value("projectId")
+                if not project_id:
+                    project_id = _interactive_project_id(api) or _parse_id(_prompt("Project ID"))
+                value = _interactive_environment(api, project_id) or _prompt("Environment", default="dev")
+            elif dtype == "identityId":
+                value = _interactive_identity_id(api, org_id) or _parse_id(_prompt("Machine identity ID"))
+
+    if not value:
+        _print("Error: value is required. Use --value or run in interactive mode.")
         raise SystemExit(1)
+
     if dtype in ("orgId", "identityId", "projectId"):
         value = _parse_id(value)
 
     if args.global_scope:
+        if dtype not in GLOBAL_TYPES:
+            _print(f"Error: only {', '.join(GLOBAL_TYPES)} can be set globally. {dtype} is org-specific.")
+            raise SystemExit(1)
+        if dtype == "orgId":
+            org_ids = get_org_ids()
+            if org_ids and value not in org_ids:
+                _print(f"Error: organization '{value}' not found in configured orgs. Run 'ih init token' to add it.")
+                raise SystemExit(1)
         set_global(dtype, value)
         _print(f"Global {dtype} set to: {value}")
     else:
@@ -537,6 +503,9 @@ def cmd_unset(args):
         _print(f"Error: invalid type '{dtype}'. Must be one of: {', '.join(DEFAULT_TYPES)}")
         raise SystemExit(1)
     if args.global_scope:
+        if dtype not in GLOBAL_TYPES:
+            _print(f"Error: only {', '.join(GLOBAL_TYPES)} can be set globally. {dtype} is org-specific.")
+            raise SystemExit(1)
         remove_global(dtype)
         _print(f"Global {dtype} removed.")
     else:
@@ -560,7 +529,7 @@ def _resolve_target(api, args):
 
 
 def cmd_pull(args):
-    org_id = _resolve_org_id(args, allow_prompt=not args.yes, api=_get_api_for_org_silent(_resolve_org_id(args, False, None)))
+    org_id = _resolve_org_id(args, allow_prompt=not args.yes)
     if not org_id:
         _print("Error: orgId is required.")
         raise SystemExit(1)
@@ -585,7 +554,7 @@ def _pair_updates(keys, values):
 
 
 def cmd_push(args):
-    org_id = _resolve_org_id(args, allow_prompt=not args.yes, api=_get_api_for_org_silent(_resolve_org_id(args, False, None)))
+    org_id = _resolve_org_id(args, allow_prompt=not args.yes)
     if not org_id:
         _print("Error: orgId is required.")
         raise SystemExit(1)
@@ -639,7 +608,7 @@ def cmd_push(args):
 
 
 def cmd_history(args):
-    org_id = _resolve_org_id(args, allow_prompt=not args.yes, api=_get_api_for_org_silent(_resolve_org_id(args, False, None)))
+    org_id = _resolve_org_id(args, allow_prompt=not args.yes)
     if not org_id:
         _print("Error: orgId is required.")
         raise SystemExit(1)
@@ -665,7 +634,7 @@ def cmd_history(args):
 
 
 def cmd_rollback(args):
-    org_id = _resolve_org_id(args, allow_prompt=not args.yes, api=_get_api_for_org_silent(_resolve_org_id(args, False, None)))
+    org_id = _resolve_org_id(args, allow_prompt=not args.yes)
     if not org_id:
         _print("Error: orgId is required.")
         raise SystemExit(1)
@@ -716,17 +685,15 @@ def main():
 
     p_init_token = init_sub.add_parser("token", help="Configure API token")
     p_init_token.add_argument("--token", help="Infisical API token")
-    a = p_init_token.add_argument("--org-id", help="Organization ID bound to this token")
-    a.completer = _complete_org_ids
+    p_init_token.add_argument("--org-id", help="Organization ID bound to this token")
+    p_init_token.add_argument("--org-name", help="Organization name (for display)")
     p_init_token.add_argument("--yes", "-y", action="store_true", help="Non-interactive")
+    p_init_token.add_argument("--skip-checks", action="store_true", help="Skip token validation and org-id verification")
 
     p_init_folder = init_sub.add_parser("folder", help="Initialize local .inf context")
     a = p_init_folder.add_argument("--org-id", help="Organization ID")
-    a.completer = _complete_org_ids
     a = p_init_folder.add_argument("--project-id", help="Project ID")
-    a.completer = _complete_project_ids
     a = p_init_folder.add_argument("--environment", "-e", help="Environment slug (default: dev)")
-    a.completer = _complete_environments
     p_init_folder.add_argument("--yes", "-y", action="store_true", help="Non-interactive")
 
     p_create = sub.add_parser("create", help="Create resources")
@@ -735,9 +702,7 @@ def main():
     p_create_project.add_argument("--name", help="Project name")
     p_create_project.add_argument("--slug", help="Project slug")
     a = p_create_project.add_argument("--org-id", help="Organization ID")
-    a.completer = _complete_org_ids
     a = p_create_project.add_argument("--identity-id", help="Machine identity ID")
-    a.completer = _complete_identity_ids
     p_create_project.add_argument("--role", choices=VALID_ROLES, help="Identity role")
     p_create_project.add_argument("--yes", "-y", action="store_true", help="Non-interactive")
 
@@ -745,23 +710,19 @@ def main():
     list_sub = p_list.add_subparsers(dest="list_object")
     p_lo = list_sub.add_parser("orgs", help="List organizations")
     a = p_lo.add_argument("--org-id", help="Organization ID")
-    a.completer = _complete_org_ids
     p_lo.add_argument("--yes", "-y", action="store_true", help="Non-interactive")
 
     p_lp = list_sub.add_parser("projects", help="List projects")
     a = p_lp.add_argument("--org-id", help="Organization ID")
-    a.completer = _complete_org_ids
     p_lp.add_argument("--yes", "-y", action="store_true", help="Non-interactive")
 
     p_li = list_sub.add_parser("identities", help="List identities")
     a = p_li.add_argument("--org-id", help="Organization ID")
-    a.completer = _complete_org_ids
     p_li.add_argument("--yes", "-y", action="store_true", help="Non-interactive")
 
     p_set = sub.add_parser("set", help="Set context value")
     p_set.add_argument("type", choices=DEFAULT_TYPES, help="Value type")
-    a = p_set.add_argument("--value", required=True, help="Value")
-    a.completer = _complete_set_value
+    a = p_set.add_argument("--value", help="Value")
     p_set.add_argument("--global", dest="global_scope", action="store_true", help="Set global value")
 
     p_unset = sub.add_parser("unset", help="Unset context value")
@@ -770,22 +731,16 @@ def main():
 
     p_pull = sub.add_parser("pull", help="Pull env from remote")
     a = p_pull.add_argument("--org-id", help="Organization ID")
-    a.completer = _complete_org_ids
     a = p_pull.add_argument("--project-id", help="Project ID")
-    a.completer = _complete_project_ids
     a = p_pull.add_argument("--environment", "-e", help="Environment")
-    a.completer = _complete_environments
     p_pull.add_argument("-f", "--file", help="Output file path")
     p_pull.add_argument("-p", action="store_true", help="Print to stdout")
     p_pull.add_argument("--yes", "-y", action="store_true", help="Non-interactive")
 
     p_push = sub.add_parser("push", help="Push env to remote")
     a = p_push.add_argument("--org-id", help="Organization ID")
-    a.completer = _complete_org_ids
     a = p_push.add_argument("--project-id", help="Project ID")
-    a.completer = _complete_project_ids
     a = p_push.add_argument("--environment", "-e", help="Environment")
-    a.completer = _complete_environments
     p_push.add_argument("-f", "--file", help="Input file path")
     p_push.add_argument("-k", action="append", help="Secret key (repeatable)")
     p_push.add_argument("-v", action="append", help="Secret value (repeatable)")
@@ -793,29 +748,21 @@ def main():
 
     p_hist = sub.add_parser("history", help="Show secret history")
     a = p_hist.add_argument("--org-id", help="Organization ID")
-    a.completer = _complete_org_ids
     a = p_hist.add_argument("--project-id", help="Project ID")
-    a.completer = _complete_project_ids
     a = p_hist.add_argument("--environment", "-e", help="Environment")
-    a.completer = _complete_environments
     a = p_hist.add_argument("--name", help="Secret name")
-    a.completer = _complete_secret_names
     p_hist.add_argument("--yes", "-y", action="store_true", help="Non-interactive")
 
     p_rb = sub.add_parser("rollback", help="Rollback secret and sync local file")
     a = p_rb.add_argument("--org-id", help="Organization ID")
-    a.completer = _complete_org_ids
     a = p_rb.add_argument("--project-id", help="Project ID")
-    a.completer = _complete_project_ids
     a = p_rb.add_argument("--environment", "-e", help="Environment")
-    a.completer = _complete_environments
     a = p_rb.add_argument("--name", help="Secret name")
-    a.completer = _complete_secret_names
     p_rb.add_argument("--version", help="Version to rollback to")
     p_rb.add_argument("-f", "--file", help="Local file to sync (default: .env)")
     p_rb.add_argument("--yes", "-y", action="store_true", help="Non-interactive")
 
-    argcomplete.autocomplete(parser)
+    argcomplete.autocomplete(parser, default_completer=None)
     args = parser.parse_args()
     if not args.command:
         parser.print_help()
