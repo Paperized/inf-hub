@@ -127,10 +127,6 @@ def _display_rollback_versions(api, project_id: str, environment: str, secret_na
         except Exception:
             continue
 
-    if versions:
-        rows = [[value, f"v{version}"] for version, value in versions]
-        ui.print_table("Rollback versions", ["Value", "Version"], rows)
-
     return current_version, versions
 
 

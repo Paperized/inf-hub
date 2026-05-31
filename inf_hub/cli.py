@@ -180,7 +180,8 @@ def main() -> None:
     try:
         dispatch(args)
     except InteractiveAbort:
-        print_line("\nOperation cancelled.")
+        sys.exit(130)
+    except KeyboardInterrupt:
         sys.exit(130)
     except (ValidationError, ConfigError) as exc:
         print_line(f"Error: {exc}")
