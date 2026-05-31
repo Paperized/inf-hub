@@ -107,7 +107,7 @@ ih-dc() {
     [ -f .inf ] || { echo "Error: not an inf-hub project" >&2; return 1; }
     setopt localtraps
     trap 'rm -f .env.inf' EXIT INT TERM
-    ih pull -p > .env.inf || return 1
+    ih pull -f .env.inf || return 1
     docker compose --env-file .env.inf "$@"
 }
 ```
