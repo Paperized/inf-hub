@@ -134,8 +134,8 @@ ih rollback --name API_KEY --version 2 -f .env.rollback
 - `ih init folder`
 - `ih create project`
 - `ih list orgs|projects|identities`
-- `ih set TYPE --value VALUE [--global]`
-- `ih unset TYPE [--global]`
+- `ih set TYPE --value VALUE`
+- `ih unset TYPE`
 - `ih pull [-f path | -p]`
 - `ih push [-f path | (-k KEY -v VALUE)...]`
 - `ih history --name NAME`
@@ -143,8 +143,11 @@ ih rollback --name API_KEY --version 2 -f .env.rollback
 
 ## Notes
 
-- In local scope, `ih set/unset` requires `.inf`; use `--global` for global config.
-- Only `orgId` and `environment` can be set globally; `projectId` and `identityId` are org-specific and can only be set locally.
+- `ih set/unset` always target local `.inf` context.
 - If a command targets an org without a saved token, it fails explicitly and tells you which org token is missing.
 - If a command targets an org not in the saved list, it fails and tells you to run `ih init token` to add it.
 - `ih push` file mode and inline mode are mutually exclusive.
+
+## Architecture
+
+- Technical architecture and contributor guide: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)

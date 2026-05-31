@@ -11,7 +11,6 @@ KEYRING_USERNAME = "default-token"
 LOCAL_INF_FILE = Path(".inf")
 
 DEFAULT_TYPES = ("orgId", "identityId", "projectId", "environment")
-GLOBAL_TYPES = ("orgId", "environment")
 
 
 def ensure_config_dir():
@@ -30,19 +29,6 @@ def save_config(config):
     with open(CONFIG_FILE, "w") as f:
         json.dump(config, f, indent=2)
     CONFIG_FILE.chmod(0o600)
-
-
-def get_config_or_exit():
-    token = load_token_secure()
-    config = load_config()
-    legacy_token = (config or {}).get("token")
-    if not token and not legacy_token:
-        print("Error: not configured. Run 'ih init' first.")
-        raise SystemExit(1)
-    if not config:
-        config = {}
-    config["token"] = token or legacy_token
-    return config
 
 
 def load_token_secure():
@@ -67,73 +53,12 @@ def save_token_for_org(org_id, token):
     keyring.set_password(KEYRING_SERVICE, _org_token_username(org_id), token)
 
 
-def delete_token_secure():
-    try:
-        keyring.delete_password(KEYRING_SERVICE, KEYRING_USERNAME)
-    except keyring.errors.PasswordDeleteError:
-        pass
-
-
-def get_token_or_exit():
-    token = load_token_secure()
-    if token:
-        return token
-
-    config = load_config() or {}
-    legacy_token = config.get("token")
-    if legacy_token:
-        return legacy_token
-
-    print("Error: not configured. Run 'ih init' first.")
-    raise SystemExit(1)
-
-
 def get_token_for_org_or_exit(org_id):
     token = load_token_for_org(org_id)
     if token:
         return token
     print(f"Error: missing token for org '{org_id}'. Run 'ih init token --org-id {org_id}'.")
     raise SystemExit(1)
-
-
-def get_default(key):
-    config = load_config()
-    if not config:
-        return None
-    entry = config.get("defaults", {}).get(key)
-    if entry is None:
-        return None
-    if isinstance(entry, dict):
-        return entry.get("value")
-    return entry
-
-
-def get_global(key):
-    return get_default(key)
-
-
-def set_default(key, value):
-    config = load_config() or {}
-    if "defaults" not in config:
-        config["defaults"] = {}
-    config["defaults"][key] = {"value": value}
-    save_config(config)
-
-
-def set_global(key, value):
-    set_default(key, value)
-
-
-def remove_default(key):
-    config = load_config()
-    if not config or "defaults" not in config:
-        return
-    config["defaults"].pop(key, None)
-    save_config(config)
-
-
-def remove_global(key):
-    remove_default(key)
 
 
 def load_orgs():

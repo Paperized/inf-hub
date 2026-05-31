@@ -35,10 +35,10 @@ ih init folder --org-id "<org-uuid>" --project-id "<project-uuid>" --environment
 
 After this, commands read defaults from `.inf`.
 
-## Global vs local config
+## Local config model
 
-Only `orgId` and `environment` can be set globally via `ih set TYPE --value VALUE --global`.
-`projectId` and `identityId` are org-specific and can only be set locally (requires `.inf`).
+`ih set`/`ih unset` work only on local `.inf` context.
+Execution context precedence is: explicit CLI args > local `.inf` > interactive selection.
 
 ## Core commands
 
