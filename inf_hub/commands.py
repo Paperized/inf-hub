@@ -35,6 +35,14 @@ from inf_hub.services import (
 VALID_ROLES = ("admin", "member", "viewer", "no-access")
 
 
+def _choice_left(value: str) -> str:
+    return value.split("|", 1)[0].strip()
+
+
+def _choice_right(value: str) -> str:
+    return value.rsplit("|", 1)[-1].strip()
+
+
 def _extract_org_info_from_token(token: str | None) -> tuple[str | None, str | None]:
     if not token:
         return None, None
@@ -53,7 +61,7 @@ def _extract_org_info_from_token(token: str | None) -> tuple[str | None, str | N
 def _interactive_token_id() -> str:
     tokens = get_tokens_or_exit()
     choices = [f"{t['tokenId']} | {t.get('orgId', '')}" for t in tokens]
-    return parse_id(ui.autocomplete_choice("Select token", choices)) or ""
+    return _choice_left(ui.autocomplete_choice("Select token", choices))
 
 
 def _interactive_project_id(api) -> str | None:
@@ -64,7 +72,7 @@ def _interactive_project_id(api) -> str | None:
     if not projects:
         raise ValidationError("no projects found for selected token")
     choices = [f"{p['name']} | {p['id']}" for p in projects]
-    return parse_id(ui.autocomplete_choice("Select project", choices))
+    return _choice_right(ui.autocomplete_choice("Select project", choices))
 
 
 def _interactive_environment(api, project_id: str) -> str | None:
@@ -77,8 +85,8 @@ def _interactive_environment(api, project_id: str) -> str | None:
             envs = p.get("environments", [])
             if not envs:
                 raise ValidationError("no environments found for selected project")
-            choices = [f"{e['slug']} | {e['name']}" for e in envs]
-            return parse_id(ui.autocomplete_choice("Select environment", choices))
+            choices = [f"{e['name']} | {e['slug']}" for e in envs]
+            return _choice_right(ui.autocomplete_choice("Select environment", choices))
     raise ValidationError("selected project not found while resolving environments")
 
 
@@ -90,7 +98,7 @@ def _interactive_identity_id(api, org_id: str) -> str | None:
     if not identities:
         raise ValidationError("no identities found for selected token")
     choices = [f"{i.get('identity', {}).get('name', 'unknown')} | {i.get('identityId', i.get('id'))}" for i in identities]
-    return parse_id(ui.autocomplete_choice("Select machine identity", choices))
+    return _choice_right(ui.autocomplete_choice("Select machine identity", choices))
 
 
 def _resolve_project_name(api, project_id: str) -> str:
