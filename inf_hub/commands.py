@@ -323,8 +323,8 @@ def cmd_pull(args: Namespace) -> None:
     project_id, environment = resolve_target(api, args, _interactive_project_id, _interactive_environment)
     secrets = api.list_secrets(project_id, environment).get("secrets", [])
     if args.p:
-        for s in secrets:
-            ui.print_line(f"{s['secretKey']}={s.get('secretValue', '')}")
+        rows = [[s["secretKey"], s.get("secretValue", "")] for s in secrets]
+        ui.print_table("Pulled secrets", ["Secret", "Value"], rows)
         ui.print_line(f"Pulled secrets from Env: {environment} (printed to stdout).")
         return
     out_file = args.file or ".env"
@@ -361,20 +361,37 @@ def cmd_push(args: Namespace) -> None:
         raise ValidationError("no values to push")
 
     current = {s.get("secretKey"): s.get("secretValue", "") for s in api.list_secrets(project_id, environment).get("secrets", [])}
+    to_apply: list[SecretUpdate] = []
+    ignored: list[SecretUpdate] = []
+    preview_rows: list[list[str]] = []
+    for update in updates:
+        old = current.get(update.key)
+        if old == update.value:
+            ignored.append(update)
+            preview_rows.append([update.key, "<MISSING>" if old is None else old, update.value, "IGNORE"])
+        else:
+            to_apply.append(update)
+            preview_rows.append([update.key, "<MISSING>" if old is None else old, update.value, "APPLY"])
+
     if not args.yes:
-        rows: list[list[str]] = []
-        for update in updates:
-            old = current.get(update.key)
-            rows.append([update.key, "<MISSING>" if old is None else old, update.value])
-        ui.print_table("Pending secret updates", ["Secret", "Current", "New"], rows)
+        ui.print_table("Pending secret updates", ["Secret", "Current", "New", "Action"], preview_rows)
+        if not to_apply:
+            ui.print_line("No changes detected: all values are unchanged.")
+            return
         if not ui.confirm("Proceed?"):
             ui.print_line("Aborted.")
             return
 
-    push_updates(api, project_id, environment, updates)
+    if to_apply:
+        push_updates(api, project_id, environment, to_apply)
     out_file = args.file or ".env"
     synced = sync_local_if_exists(api, project_id, environment, out_file)
-    ui.print_line(f"Pushed {len(updates)} secrets to Env: {environment} from {source_desc}.")
+    ui.print_line(f"Pushed {len(to_apply)} secrets to Env: {environment} from {source_desc}.")
+    ui.print_line(f"Ignored {len(ignored)} unchanged secrets.")
+    if to_apply:
+        ui.print_line(f"Updated keys: {', '.join([u.key for u in to_apply])}")
+    if ignored:
+        ui.print_line(f"Ignored keys: {', '.join([u.key for u in ignored])}")
     if synced:
         ui.print_line(f"Updated local file: {synced}.")
 
